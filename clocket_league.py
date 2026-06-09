@@ -51,8 +51,13 @@ import urllib.request
 # ---------------------------------------------------------------------------
 BLUE = "#1C7DF7"      # team 0
 ORANGE = "#F17820"    # team 1
+BLUE_HI = "#8CC6FF"   # team 0, brightened (just scored)
+ORANGE_HI = "#FFC08A"  # team 1, brightened (just scored)
 WHITE = "#FFFFFF"
-CLOCK = "#AAAAAA"     # in-game clock
+CLOCK = "#AAAAAA"     # in-game clock, plenty of time
+AMBER = "#FFB300"     # clock under a minute
+RED = "#FF2A2A"       # clock in the final seconds / loss
+GREEN = "#22DD66"     # GO! / win
 DIM = "#555555"
 POST = "#FFD000"      # crossbar / post flash
 OT = "#FFD000"        # overtime accent
@@ -62,7 +67,7 @@ CLOCK_REFRESH = 1.0   # how often to re-push the ticking clock
 FLASH_SECS = 4.0      # how long the score flashes after a goal
 POST_SECS = 1.6       # how long the POST banner blinks after a crossbar hit
 OT_NOTICE_SECS = 3.0  # how long the OVERTIME banner shows when OT begins
-START_SECS = 2.5      # how long "MATCH STARTING" shows at kickoff
+START_SECS = 3.6      # kickoff "3 · 2 · 1 · GO!" countdown
 FINAL_SECS = 12.0     # how long the FINAL card holds before releasing the clock
 IDLE_RELEASE_SECS = 30.0  # if a live match goes silent this long, release the clock
 
@@ -306,6 +311,56 @@ def ballshark_source(ws_url: str, poll: float = 1.0):
             yield None
 
 
+def demo_source(speed: float = 1.0):
+    """A scripted, looping match — no Rocket League required. Great for recording
+    a GIF: kickoff countdown, a comeback, a crossbar, overtime, a golden goal,
+    FINAL — then it loops. --demo-speed scales the pace."""
+    def nap(sec):
+        time.sleep(max(0.05, sec / speed))
+
+    while True:
+        yield {"type": "_connected"}
+        yield {"type": "start"}
+        nap(START_SECS + 0.4)             # let the 3 · 2 · 1 · GO! play
+        t0 = t1 = 0
+        # game-second -> action: ("goal", team) | ("crossbar", None)
+        script = {
+            265: ("goal", 0),             # blue strikes first
+            205: ("crossbar", None),      # rang the post
+            165: ("goal", 1),             # orange answers
+            95:  ("goal", 1),             # orange takes the lead
+            18:  ("goal", 0),             # blue equalizes late!
+        }
+        sec = 300
+        while sec >= 0:
+            act = script.get(sec)
+            if act:
+                kind, team = act
+                if kind == "goal":
+                    t0, t1 = (t0 + 1, t1) if team == 0 else (t0, t1 + 1)
+                    yield {"type": "tick", "t0": t0, "t1": t1, "secs": sec, "ot": False}
+                    nap(FLASH_SECS + 0.6)
+                else:
+                    yield {"type": "crossbar"}
+                    nap(POST_SECS + 0.5)
+            yield {"type": "tick", "t0": t0, "t1": t1, "secs": sec, "ot": False}
+            nap(0.45)
+            sec -= 5
+        # 2-2 at the buzzer -> OVERTIME (sudden death, clock counts up)
+        yield {"type": "tick", "t0": t0, "t1": t1, "secs": 0, "ot": True}
+        nap(OT_NOTICE_SECS + 0.6)
+        ot = 0
+        while ot < 35:
+            yield {"type": "tick", "t0": t0, "t1": t1, "secs": ot, "ot": True}
+            nap(0.45)
+            ot += 5
+        t0 += 1                           # golden goal — blue wins it
+        yield {"type": "tick", "t0": t0, "t1": t1, "secs": ot, "ot": True}
+        nap(FLASH_SECS + 0.8)
+        yield {"type": "end"}
+        nap(FINAL_SECS + 2.5)             # hold FINAL, then loop
+
+
 # ===========================================================================
 # Renderer / state machine — decides what's on the matrix at any moment and
 # pushes it through the transport. Steady state = the in-game clock; a goal
@@ -313,12 +368,14 @@ def ballshark_source(ws_url: str, poll: float = 1.0):
 # POST; OT shows an OVERTIME banner then an "OT m:ss" clock; the end shows FINAL.
 # ===========================================================================
 class Scoreboard:
-    def __init__(self, transport) -> None:
+    def __init__(self, transport, my_team=None) -> None:
         self.tx = transport
+        self.my_team = my_team   # 0, 1, or None — drives WIN/LOSS on the FINAL card
         self.active = False
         self.t0 = self.t1 = 0
         self.secs = 0
         self.ot = False
+        self.flash_team = None   # which team most recently scored (0/1) -> color
         self.last_payload = None
         self.last_pub = 0.0
         self.last_data = 0.0
@@ -341,28 +398,53 @@ class Scoreboard:
         return p
 
     def _clock_card(self):
+        # Clock gains urgency as time runs out: gray -> amber under 1:00 ->
+        # red+blink in the final 10s. Overtime (sudden death) is always gold.
         if self.ot:
-            frags = [{"t": "OT ", "c": OT}, {"t": fmt_clock(self.secs), "c": CLOCK}]
+            return self._held([{"t": "OT ", "c": OT},
+                               {"t": fmt_clock(self.secs), "c": OT}], blink=600)
+        s = max(0, int(self.secs))
+        if s <= 10:
+            col, blink = RED, 500
+        elif s <= 60:
+            col, blink = AMBER, 0
         else:
-            frags = [{"t": fmt_clock(self.secs), "c": CLOCK}]
-        return self._held(frags)
+            col, blink = CLOCK, 0
+        return self._held([{"t": fmt_clock(s), "c": col}], blink=blink)
 
     def _score_card(self, blink):
-        frags = [{"t": str(self.t0), "c": BLUE}, {"t": "-", "c": WHITE},
-                 {"t": str(self.t1), "c": ORANGE}]
+        # The team that just scored is brightened; the other is dimmed, so a
+        # glance tells you WHO scored. Score is shown exclusively (no clock).
+        c0 = BLUE_HI if self.flash_team == 0 else (DIM if self.flash_team == 1 else BLUE)
+        c1 = ORANGE_HI if self.flash_team == 1 else (DIM if self.flash_team == 0 else ORANGE)
+        frags = [{"t": str(self.t0), "c": c0}, {"t": "-", "c": WHITE},
+                 {"t": str(self.t1), "c": c1}]
         return self._held(frags, blink=blink and 400)
 
     def _final_card(self):
         c0 = BLUE if self.t0 >= self.t1 else DIM
         c1 = ORANGE if self.t1 >= self.t0 else DIM
-        frags = [{"t": "FINAL ", "c": WHITE}, {"t": str(self.t0), "c": c0},
+        # If you told us your team, say WIN/LOSS; otherwise just FINAL.
+        label, lcolor = "FINAL ", WHITE
+        if self.my_team in (0, 1) and self.t0 != self.t1:
+            won = (self.my_team == 0) == (self.t0 > self.t1)
+            label, lcolor = ("WIN ", GREEN) if won else ("LOSS ", RED)
+        frags = [{"t": label, "c": lcolor}, {"t": str(self.t0), "c": c0},
                  {"t": "-", "c": WHITE}, {"t": str(self.t1), "c": c1}]
-        return self._held(frags)
+        return self._held(frags, blink=300 if lcolor == GREEN else 0)
+
+    def _countdown_card(self, now):
+        """Kickoff '3 · 2 · 1 · GO!' over the start window."""
+        rem = self.start_until - now
+        if rem <= 0.6:
+            return self._held("GO!", color=GREEN, blink=400)
+        n = min(3, max(1, int(rem + 0.0)))   # 3.6..0.6 -> 3,2,1
+        return self._held(str(n), color=WHITE)
 
     def _render(self, now):
         """Return the payload that should be on the matrix right now."""
         if now < self.start_until:
-            return self._held("MATCH STARTING", center=False, color=WHITE)
+            return self._countdown_card(now)
         if now < self.flash_until:
             return self._score_card(blink=True)        # goal: score exclusively
         if now < self.post_until:
@@ -385,6 +467,7 @@ class Scoreboard:
         self.t0 = self.t1 = 0
         self.secs = 0
         self.ot = False
+        self.flash_team = None
         self.start_until = now + START_SECS
         self.flash_until = self.post_until = self.ot_until = self.final_until = 0.0
         self.last_data = now
@@ -395,12 +478,16 @@ class Scoreboard:
         self.active = True
         self.final_until = 0.0      # a live tick supersedes any FINAL card
         self.last_data = now
-        goal = ev["t0"] > self.t0 or ev["t1"] > self.t1   # any score increase
+        scored0 = ev["t0"] > self.t0
+        scored1 = ev["t1"] > self.t1
+        goal = scored0 or scored1
         entering_ot = ev["ot"] and not self.ot
         self.t0, self.t1, self.secs, self.ot = ev["t0"], ev["t1"], ev["secs"], ev["ot"]
         if goal:
+            self.flash_team = 0 if scored0 else 1
             self.flash_until = now + FLASH_SECS
-            log(f"GOAL -> {self.t0}-{self.t1}{' OT' if self.ot else ''}")
+            log(f"GOAL ({'blue' if scored0 else 'orange'}) -> {self.t0}-{self.t1}"
+                f"{' OT' if self.ot else ''}")
         if entering_ot:
             # Show the OVERTIME banner AFTER any goal flash (OT starts right after
             # a tying goal), so both the score and the banner get their moment.
@@ -478,12 +565,18 @@ def build_args():
     p = argparse.ArgumentParser(
         prog="clocket-league",
         description="Live Rocket League scoreboard on an AWTRIX pixel clock.")
-    p.add_argument("--source", choices=["rl", "ballshark"],
+    p.add_argument("--source", choices=["rl", "ballshark", "demo"],
                    default=e("CL_SOURCE", "rl"),
-                   help="where match data comes from (default: rl — RL's own socket)")
+                   help="where match data comes from (rl=RL's socket [default], "
+                        "ballshark=tracker WS, demo=scripted match for a GIF)")
     p.add_argument("--transport", choices=["http", "mqtt"],
                    default=e("CL_TRANSPORT", "http"),
                    help="how to reach the clock (default: http)")
+    p.add_argument("--my-team", choices=["blue", "orange"],
+                   default=e("CL_MY_TEAM", "") or None,
+                   help="your team -> the FINAL card shows WIN/LOSS instead of FINAL")
+    p.add_argument("--demo-speed", type=float, default=float(e("CL_DEMO_SPEED", "1.0")),
+                   help="--source demo pacing multiplier (higher = faster)")
     # rl source
     p.add_argument("--rl-host", default=e("RL_HOST", "127.0.0.1"))
     p.add_argument("--rl-port", type=int, default=int(e("RL_PORT", "49123")))
@@ -514,6 +607,9 @@ def make_transport(a):
 
 
 def make_source(a):
+    if a.source == "demo":
+        log(f"source: demo (scripted match, speed={a.demo_speed})")
+        return demo_source(a.demo_speed)
     if a.source == "rl":
         log(f"source: rl -> {a.rl_host}:{a.rl_port}")
         return rl_source(a.rl_host, a.rl_port)
@@ -524,7 +620,8 @@ def make_source(a):
 def main():
     a = build_args()
     tx = make_transport(a)
-    board = Scoreboard(tx)
+    my_team = {"blue": 0, "orange": 1}.get(a.my_team)
+    board = Scoreboard(tx, my_team=my_team)
 
     stop = {"flag": False}
 

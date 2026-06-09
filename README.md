@@ -7,14 +7,17 @@ crossbar, you get an `OVERTIME` banner, and a `FINAL` card when it's done.
 No tracker account. No cloud. No browser. It reads Rocket League's *own* local
 Stats API and talks straight to your clock over your LAN.
 
+![clocket-league on an Ulanzi TC001](demo.gif)
+
+What you see, start to finish:
+
 ```
-        ┌────────────────────────────┐
-        │  3:24      ← clock ticking  │
-        └────────────────────────────┘
-   goal →  2-1      (flashes, blue vs orange)
-crossbar →  POST     (blinks)
-overtime →  OVERTIME → OT 1:12
-   end   →  FINAL 3-2
+ kickoff →  3 · 2 · 1 · GO!
+   live  →  3:24            clock ticks; goes amber under 1:00, red in the last 10s
+   goal  →  2-1             score flashes; the team that scored lights up brighter
+crossbar →  POST            blinks gold when you ring the post
+overtime →  OVERTIME → OT 0:42   sudden death, gold
+   end   →  FINAL 3-2       (or WIN / LOSS if you tell it your team)
 ```
 
 ---
@@ -61,13 +64,28 @@ clock; between matches the clock goes back to normal.
 
 Prefer not to pass flags? Copy `.env.example` to `.env` and set `CLOCK_HOST=...`.
 
+### See it without Rocket League (demo mode)
+
+Want to try it, or record a clip? Demo mode plays a full scripted match on a
+loop — kickoff countdown, a comeback, a crossbar, overtime, a golden goal, the
+FINAL card — no RL needed:
+
+```bash
+python clocket_league.py --source demo --clock-host 192.168.1.50
+# --demo-speed 1.5 to go faster
+```
+
+*(The `demo.gif` above was recorded straight off the clock in this mode.)*
+
 ---
 
 ## Options
 
 ```
---source rl|ballshark      where match data comes from (default: rl)
+--source rl|ballshark|demo where match data comes from (default: rl)
 --transport http|mqtt      how to reach the clock (default: http)
+--my-team blue|orange      show WIN/LOSS on the FINAL card instead of FINAL
+--demo-speed 1.5           pace of --source demo (higher = faster)
 
 # rl source
 --rl-host / --rl-port      RL Stats API socket (default 127.0.0.1:49123)
