@@ -28,6 +28,8 @@ BLUE = "#1C7DF7"        # RL blue team
 ORANGE = "#FF8000"      # RL orange team (true orange — 50% green reads orange on LEDs)
 BLUE_HI = "#8CC6FF"     # brightened (just scored)
 ORANGE_HI = "#FFB347"
+BLUE_DIM = "#0E2E5C"    # the non-scoring side during a goal
+ORANGE_DIM = "#4A2600"
 WHITE = "#FFFFFF"
 CLOCK = "#AAAAAA"       # in-game clock, plenty of time
 AMBER = "#FFB300"       # clock under a minute
@@ -75,15 +77,51 @@ def boost_pct(v) -> int:
     return max(0, min(100, v))
 
 
-def _ball_draw(cx, cy=4, r=3):
-    """Draw ops for a soccer ball: white circle + one clean black center pentagon."""
+def _soccer(cx, cy=4, r=3, spin=0.0):
+    """White ball with black pentagon spots arranged in a ring (more dots =
+    soccer look). `spin` rotates the spots so it looks like it's rolling."""
+    import math
     K = "#000000"
+    out = [{"dfc": [cx, cy, r, WHITE]}, {"dp": [cx, cy, K]}]
+    rr, n = (1.9, 5) if r >= 3 else (1.2, 4)
+    for k in range(n):
+        a = spin + k * (6.2832 / n)
+        out.append({"dp": [cx + round(rr * math.cos(a)), cy + round(rr * math.sin(a)), K]})
+    return out
+
+
+def _ball_draw(cx, cy=4, r=3):
+    return _soccer(cx, cy, r, 0.0)
+
+
+def _fennec(x, color):
+    """A low, wide Fennec-style car (~8px), left edge at x."""
+    dark = "#1A1A1A"
     return [
-        {"dfc": [cx, cy, r, WHITE]},
-        {"dp": [cx, cy - 1, K]},
-        {"dp": [cx - 1, cy, K]}, {"dp": [cx, cy, K]}, {"dp": [cx + 1, cy, K]},
-        {"dp": [cx, cy + 1, K]},
+        {"df": [x, 4, 8, 2, color]},          # wide flat body
+        {"df": [x + 2, 3, 4, 1, color]},      # low canopy
+        {"dp": [x + 1, 6, dark]}, {"dp": [x + 6, 6, dark]},  # wheels
     ]
+
+
+def _car_ball_cards(cars, x0=-14, x1=44):
+    """Animation frames: soccer ball out front, car(s) chasing behind.
+    cars = [(x_offset, color), ...]."""
+    cards = []
+    for step in range(x0, x1, 2):
+        draw = []
+        for off, color in cars:
+            draw += _fennec(step + off, color)
+        draw += _soccer(step + 14, 4, 2, spin=step * 0.6)
+        cards.append({"draw": draw, "hold": True, "stack": False, "wakeup": True,
+                      "text": "", "center": True, "pushIcon": 0})
+    return cards
+
+
+def play_cars(tx, cars, sleep_fn, frame=0.05):
+    for c in _car_ball_cards(cars):
+        tx.notify(c)
+        sleep_fn(frame)
 
 
 def step_boost(b: int) -> int:
@@ -391,84 +429,73 @@ def run_showcase(tx, speed=1.0, loop=True):
         nap(secs)
 
     def roll():
-        """Transition: a little car drives across pushing the soccer ball. No text
-        labels — segments are separated by this so you can split the clip cleanly."""
-        K = "#000000"
-        for x in range(-11, 41, 2):
-            bx = x + 11                                 # ball rides ahead, with a gap
-            ph = x * 0.7
-            draw = [
-                {"df": [x, 4, 6, 2, ORANGE]},           # car body
-                {"df": [x + 1, 3, 3, 1, ORANGE]},       # cockpit
-                {"dp": [x + 1, 6, "#444444"]}, {"dp": [x + 4, 6, "#444444"]},  # wheels
-                {"dfc": [bx, 4, 2, WHITE]}, {"dp": [bx, 4, K]},                # ball
-                {"dp": [bx + round(1.2 * math.cos(ph)),
-                        4 + round(1.2 * math.sin(ph)), K]},                    # spin
-            ]
-            tx.notify(sb._held(None, draw=draw))
-            nap(0.05)
+        """Transition: a blue AND an orange Fennec chase the soccer ball across.
+        No text labels — segments are separated by this so you can split cleanly."""
+        play_cars(tx, [(0, BLUE), (-10, ORANGE)], nap)
 
     while True:
-        # Kickoff: ball, then 3 · 2 · 1 · GO!
-        push(sb._ball_card(), 1.6)
+        # Kickoff: the cars drive by, THEN 3 · 2 · 1 · GO!
+        roll()
         for n in ("3", "2", "1"):
-            push(sb._held(n, color=WHITE), 0.85)
-        push(sb._held("GO!", color=GREEN, blink=400), 1.1)
+            push(sb._held(n, color=WHITE), 1.1)
+        push(sb._held("GO!", color=GREEN, blink=400), 1.4)
         roll()
         # Score + clock together
         sb.t0, sb.t1 = 2, 1
-        for s in (212, 206, 200, 194):
+        for s in (212, 205, 198, 191, 184):
             sb.secs = s
-            push(sb._live_card(), 1.0)
+            push(sb._live_card(), 1.3)
         roll()
         # Score only
-        push(sb._score_panel(), 3.5)
+        push(sb._score_panel(), 5.0)
         roll()
         # Clock only, with urgency (gray -> amber -> red)
         sb.ot = False
         for s in (95, 45, 9):
             sb.secs = s
-            push(sb._time_panel(), 2.0)
+            push(sb._time_panel(), 3.0)
         roll()
-        # Goal (both teams)
+        # Goal — blue scores (blue pops, orange dims), then orange scores
         sb.t0, sb.t1, sb.flash_team = 2, 1, 0
-        push(sb._goal_banner(), 1.6)
-        push(sb._score_only(), 1.6)
+        push(sb._goal_banner(), 2.2)
+        push(sb._score_only(), 2.6)
         sb.t0, sb.t1, sb.flash_team = 2, 2, 1
-        push(sb._goal_banner(), 1.6)
-        push(sb._score_only(), 1.6)
+        push(sb._goal_banner(), 2.2)
+        push(sb._score_only(), 2.6)
         roll()
         # Post
-        push(sb._held("POST", color=GOLD, blink=300), 3.0)
+        push(sb._held("POST", color=GOLD, blink=300), 4.0)
         roll()
         # Overtime
-        push(sb._held("OVERTIME", center=False, color=GOLD, blink=400), 2.4)
+        push(sb._held("OVERTIME", center=False, color=GOLD, blink=400), 3.2)
         sb.ot = True
-        for s in (4, 9, 14, 19):
+        for s in (4, 9, 14, 19, 24):
             sb.secs = s
-            push(sb._time_panel(), 1.0)
+            push(sb._time_panel(), 1.4)
         sb.ot = False
         roll()
-        # Your boost (fills L->R, realistic flow)
+        # Your boost (fills L->R with the % on it, realistic flow)
         b = 60
-        for _ in range(20):
+        for _ in range(24):
             b = step_boost(b)
             sb.players = [{"team": 0, "boost": b, "you": True}]
-            push(sb._boost_self(), 0.38)
+            push(sb._boost_self(), 0.5)
         roll()
         # Teammates' boost (vertical bars, fill bottom->top, realistic)
         bs = [40, 80, 55]
-        for _ in range(22):
+        for _ in range(26):
             bs = [step_boost(x) for x in bs]
             sb.players = ([{"team": 0, "boost": 0, "you": True}] +
                           [{"team": 0, "boost": bs[i], "you": False} for i in range(3)])
-            push(sb._boost_team(), 0.38)
+            push(sb._boost_team(), 0.5)
         roll()
-        # Final: BLUE WINS! then the score blinks
+        # Final: "BLUE" -> "WINS!" -> score -> the winner's car pushes the ball away
         sb.t0, sb.t1 = 3, 2
-        push(sb._final_name(), 3.6)
-        push(sb._final_score(), 4.0)
-        roll()
+        win_col = BLUE if sb.t0 > sb.t1 else ORANGE
+        push(sb._held(sb._team_label(0 if sb.t0 > sb.t1 else 1), color=win_col), 2.0)
+        push(sb._held("WINS!", color=win_col, blink=350), 2.2)
+        push(sb._final_score(), 2.6)
+        play_cars(tx, [(0, win_col)], nap)          # drive the ball away
         if not loop:
             return
 
@@ -544,8 +571,10 @@ class Scoreboard:
         return self._held("GOAL!", color=col, blink=350)
 
     def _score_only(self):
-        c0 = BLUE_HI if self.flash_team == 0 else BLUE   # both teams stay lit
-        c1 = ORANGE_HI if self.flash_team == 1 else ORANGE
+        # The team that scored pops bright; the other side dims, so a goal is
+        # clearly THAT team's moment (great for whoever scored).
+        c0 = BLUE_HI if self.flash_team == 0 else BLUE_DIM
+        c1 = ORANGE_HI if self.flash_team == 1 else ORANGE_DIM
         return self._held([{"t": str(self.t0), "c": c0}, {"t": "-", "c": WHITE},
                            {"t": str(self.t1), "c": c1}], blink=400)
 
@@ -694,10 +723,12 @@ class Scoreboard:
         self.ot = False
         self.flash_team = None
         self._reset_windows()
-        self.ball_until = now + BALL_SECS                 # ball, then countdown
-        self.start_until = self.ball_until + START_SECS
         self.last_data = now
         log("match starting")
+        play_cars(self.tx, [(0, BLUE), (-10, ORANGE)], time.sleep, 0.04)  # kickoff drive-by
+        now = time.monotonic()                            # time passed during the drive-by
+        self.start_until = now + START_SECS               # then 3 · 2 · 1 · GO!
+        self.last_data = now
         self._publish(self._render(now), now, force=True)
 
     def on_tick(self, ev, now):
@@ -751,6 +782,9 @@ class Scoreboard:
     def on_idle(self, now):
         if self.final_until:
             if now >= self.final_until:
+                if self.t0 != self.t1:                    # winner's car pushes the ball away
+                    play_cars(self.tx, [(0, BLUE if self.t0 > self.t1 else ORANGE)],
+                              time.sleep, 0.04)
                 self.tx.dismiss()
                 self.final_until = 0.0
                 self.last_payload = None
