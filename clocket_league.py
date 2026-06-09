@@ -394,8 +394,8 @@ def run_showcase(tx, speed=1.0, loop=True):
         """Transition: a little car drives across pushing the soccer ball. No text
         labels — segments are separated by this so you can split the clip cleanly."""
         K = "#000000"
-        for x in range(-9, 39, 2):
-            bx = x + 8                                  # ball rides ahead of the car
+        for x in range(-11, 41, 2):
+            bx = x + 11                                 # ball rides ahead, with a gap
             ph = x * 0.7
             draw = [
                 {"df": [x, 4, 6, 2, ORANGE]},           # car body
