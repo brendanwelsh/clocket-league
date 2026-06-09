@@ -25,9 +25,9 @@ import urllib.request
 # Colors (AWTRIX hex). RL's own team colors are blue / orange.
 # ---------------------------------------------------------------------------
 BLUE = "#1C7DF7"        # RL blue team
-ORANGE = "#FF6A00"      # RL orange team (saturated, reads true-orange on LEDs)
+ORANGE = "#FF8000"      # RL orange team (true orange — 50% green reads orange on LEDs)
 BLUE_HI = "#8CC6FF"     # brightened (just scored)
-ORANGE_HI = "#FFA64D"
+ORANGE_HI = "#FFB347"
 WHITE = "#FFFFFF"
 CLOCK = "#AAAAAA"       # in-game clock, plenty of time
 AMBER = "#FFB300"       # clock under a minute
@@ -75,17 +75,28 @@ def boost_pct(v) -> int:
     return max(0, min(100, v))
 
 
+def _ball_draw(cx, cy=4, r=3):
+    """Draw ops for a soccer ball: white circle + one clean black center pentagon."""
+    K = "#000000"
+    return [
+        {"dfc": [cx, cy, r, WHITE]},
+        {"dp": [cx, cy - 1, K]},
+        {"dp": [cx - 1, cy, K]}, {"dp": [cx, cy, K]}, {"dp": [cx + 1, cy, K]},
+        {"dp": [cx, cy + 1, K]},
+    ]
+
+
 def step_boost(b: int) -> int:
     """Evolve a boost value the way it moves in a real match: mostly draining as
     you boost, with sudden jumps up when you grab pads (and the occasional full
     100 off a big pad). Sawtooth, not a smooth wave. (Demo/showcase only.)"""
     import random
     r = random.random()
-    if r < 0.09:
-        return 100                                  # big pad
-    if r < 0.45:
-        return min(100, b + random.randint(8, 24))  # small pads / coasting
-    return max(0, b - random.randint(7, 18))        # boosting
+    if r < 0.08:
+        return 100                                  # big pad -> full
+    if r < 0.50:
+        return min(100, b + random.randint(10, 24))  # small pads / coasting
+    return max(0, b - random.randint(10, 22))       # boosting (burns down)
 
 
 # ===========================================================================
@@ -371,7 +382,6 @@ def run_showcase(tx, speed=1.0, loop=True):
     import math
     from time import sleep
     sb = Scoreboard(tx)
-    LABEL = "#00E5FF"
 
     def nap(s):
         sleep(max(0.03, s / speed))
@@ -380,50 +390,47 @@ def run_showcase(tx, speed=1.0, loop=True):
         tx.notify(card)
         nap(secs)
 
-    def label(text):
-        push(sb._held(text, center=False, color=LABEL), 1.8 + 0.12 * len(text))
-
     def roll():
-        """A soccer ball rolling across the screen (pentagon spins as it goes)."""
-        ph = 0.0
-        for x in range(-4, 37, 2):
-            draw = [{"dfc": [x, 4, 3, WHITE]}, {"dp": [x, 4, "#000000"]}]
-            for k in range(5):
-                a = ph + k * 1.2566
-                draw.append({"dp": [x + round(1.4 * math.cos(a)),
-                                    4 + round(1.4 * math.sin(a)), "#000000"]})
+        """Transition: a little car drives across pushing the soccer ball. No text
+        labels — segments are separated by this so you can split the clip cleanly."""
+        K = "#000000"
+        for x in range(-9, 39, 2):
+            bx = x + 8                                  # ball rides ahead of the car
+            ph = x * 0.7
+            draw = [
+                {"df": [x, 4, 6, 2, ORANGE]},           # car body
+                {"df": [x + 1, 3, 3, 1, ORANGE]},       # cockpit
+                {"dp": [x + 1, 6, "#444444"]}, {"dp": [x + 4, 6, "#444444"]},  # wheels
+                {"dfc": [bx, 4, 2, WHITE]}, {"dp": [bx, 4, K]},                # ball
+                {"dp": [bx + round(1.2 * math.cos(ph)),
+                        4 + round(1.2 * math.sin(ph)), K]},                    # spin
+            ]
             tx.notify(sb._held(None, draw=draw))
-            ph += 0.9
             nap(0.05)
 
     while True:
-        # --- Kickoff: ball, then countdown ---
-        label("KICKOFF")
+        # Kickoff: ball, then 3 · 2 · 1 · GO!
         push(sb._ball_card(), 1.6)
         for n in ("3", "2", "1"):
             push(sb._held(n, color=WHITE), 0.85)
         push(sb._held("GO!", color=GREEN, blink=400), 1.1)
         roll()
-        # --- Score + clock together (default screen) ---
-        label("SCORE + CLOCK")
+        # Score + clock together
         sb.t0, sb.t1 = 2, 1
         for s in (212, 206, 200, 194):
             sb.secs = s
             push(sb._live_card(), 1.0)
         roll()
-        # --- Score only ---
-        label("SCORE")
+        # Score only
         push(sb._score_panel(), 3.5)
         roll()
-        # --- Clock only, with urgency ---
-        label("CLOCK")
+        # Clock only, with urgency (gray -> amber -> red)
         sb.ot = False
         for s in (95, 45, 9):
             sb.secs = s
             push(sb._time_panel(), 2.0)
         roll()
-        # --- Goal (both teams) ---
-        label("GOAL")
+        # Goal (both teams)
         sb.t0, sb.t1, sb.flash_team = 2, 1, 0
         push(sb._goal_banner(), 1.6)
         push(sb._score_only(), 1.6)
@@ -431,12 +438,10 @@ def run_showcase(tx, speed=1.0, loop=True):
         push(sb._goal_banner(), 1.6)
         push(sb._score_only(), 1.6)
         roll()
-        # --- Post ---
-        label("POST")
+        # Post
         push(sb._held("POST", color=GOLD, blink=300), 3.0)
         roll()
-        # --- Overtime ---
-        label("OVERTIME")
+        # Overtime
         push(sb._held("OVERTIME", center=False, color=GOLD, blink=400), 2.4)
         sb.ot = True
         for s in (4, 9, 14, 19):
@@ -444,25 +449,22 @@ def run_showcase(tx, speed=1.0, loop=True):
             push(sb._time_panel(), 1.0)
         sb.ot = False
         roll()
-        # --- Your boost (fills L->R, realistic flow) ---
-        label("YOUR BOOST")
-        b = 50
-        for _ in range(18):
+        # Your boost (fills L->R, realistic flow)
+        b = 60
+        for _ in range(20):
             b = step_boost(b)
             sb.players = [{"team": 0, "boost": b, "you": True}]
             push(sb._boost_self(), 0.38)
         roll()
-        # --- Teammates' boost (vertical bars, fill bottom->top, realistic) ---
-        label("TEAM BOOST")
-        bs = [35, 75, 55]
-        for _ in range(20):
+        # Teammates' boost (vertical bars, fill bottom->top, realistic)
+        bs = [40, 80, 55]
+        for _ in range(22):
             bs = [step_boost(x) for x in bs]
             sb.players = ([{"team": 0, "boost": 0, "you": True}] +
                           [{"team": 0, "boost": bs[i], "you": False} for i in range(3)])
             push(sb._boost_team(), 0.38)
         roll()
-        # --- Final: BLUE WINS! then the score blinks ---
-        label("FINAL")
+        # Final: BLUE WINS! then the score blinks
         sb.t0, sb.t1 = 3, 2
         push(sb._final_name(), 3.6)
         push(sb._final_score(), 4.0)
@@ -571,16 +573,8 @@ class Scoreboard:
                            {"t": str(self.t1), "c": c1}], blink=450)
 
     def _ball_card(self):
-        """A little soccer ball at kickoff: white ball + black pentagon."""
-        cx, K = 15, "#000000"
-        draw = [
-            {"dfc": [cx, 4, 3, WHITE]},
-            {"dp": [cx, 4, K]},
-            {"dp": [cx - 1, 3, K]}, {"dp": [cx + 1, 3, K]},
-            {"dp": [cx - 1, 5, K]}, {"dp": [cx + 1, 5, K]},
-            {"dp": [cx - 3, 4, K]}, {"dp": [cx + 3, 4, K]},
-        ]
-        return self._held(None, draw=draw)
+        """Soccer ball at kickoff: white ball with one clean black center pentagon."""
+        return self._held(None, draw=_ball_draw(15))
 
     # -- steady "screens" (rotated by --screens / --swap-secs) -------------
     def _score_panel(self):
