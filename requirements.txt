@@ -1,0 +1,5 @@
+# The default mode (--source rl --transport http) needs NOTHING here — pure stdlib.
+# Install only what your mode needs:
+
+# paho-mqtt        # only for --transport mqtt
+# websocket-client # only for --source ballshark

@@ -1,0 +1,29 @@
+# clocket-league as a Linux systemd service.
+#
+# Example: run on a Raspberry Pi that reads a ballshark tracker on the gaming PC
+# and publishes to the clock over MQTT. Adjust paths/flags for your setup; for the
+# common standalone case use:  --source rl --transport http --clock-host <ip>
+#
+#   sudo cp clocket-league.service /etc/systemd/system/
+#   sudo systemctl enable --now clocket-league
+#
+[Unit]
+Description=clocket-league — Rocket League scoreboard on an AWTRIX clock
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/home/youruser/clocket-league
+# Put MQTT_HOST/MQTT_USER/MQTT_PASS etc. here (one KEY=VALUE per line):
+# EnvironmentFile=/home/youruser/clocket-league/.env
+ExecStart=/usr/bin/python3 /home/youruser/clocket-league/clocket_league.py \
+  --source rl --transport http --clock-host 192.168.1.50
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
