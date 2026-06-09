@@ -1,38 +1,13 @@
 #!/usr/bin/env python3
 """clocket-league — Rocket League live scoreboard on an AWTRIX pixel clock.
 
-Put your match on a 32x8 LED matrix: the in-game clock ticks down, the score
-flashes on every goal, the post lights up when you ding the crossbar, and you
-get an OVERTIME banner and a FINAL card when it's done. No tracker account, no
-cloud — it reads Rocket League's own local Stats API and talks straight to your
-clock.
+Your match on a 32x8 LED matrix: the score sits in team colors with the in-game
+clock, a blinking GOAL! pops in the scorer's color on every goal, the post lights
+up when you ding the crossbar, overtime counts up as "+m:ss", and it ends on a
+"BLUE WINS 3-2" card. Optional boost meters. No tracker account, no cloud — it
+reads Rocket League's own local Stats API and talks straight to your clock.
 
-Hardware: an Ulanzi TC001 (or any 32x8 AWTRIX 3 device). Flash AWTRIX 3 and note
-its IP. https://blueforcer.github.io/awtrix3/
-
-INPUT (where the match data comes from) — pick with --source:
-  rl         (default) read Rocket League's local Stats API TCP socket directly.
-             Enable it once: edit  <RL install>\\TAGame\\Config\\DefaultStatsAPI.ini
-                 [StatsAPI]
-                 Port=49123
-                 PacketSendRate=30
-             then restart Rocket League. (Official, documented by Psyonix:
-             https://www.rocketleague.com/en/developer/stats-api )
-  ballshark  read a running ballshark tracker's WebSocket instead (handy if you
-             already run https://github.com/brendanwelsh/ballshark and don't want
-             two things fighting over RL's socket).
-
-OUTPUT (how it reaches the clock) — pick with --transport:
-  http   (default) POST straight to the clock's HTTP API. Just needs --clock-host.
-         Zero extra Python packages.
-  mqtt   publish to an MQTT broker the clock is subscribed to (AWTRIX "HomeAssistant
-         discovery" / custom MQTT). Needs paho-mqtt and --mqtt-host / --awtrix-prefix.
-
-Quick start (most people):
-    python clocket_league.py --clock-host 192.168.1.50
-    # play Rocket League. that's it.
-
-Everything can also be set via env vars or a .env file (see .env.example).
+See README.md for setup and docs/TECHNICAL.md for how it works under the hood.
 MIT licensed. Not affiliated with Psyonix/Epic. "Rocket League" is their trademark.
 """
 from __future__ import annotations
@@ -47,29 +22,36 @@ import time
 import urllib.request
 
 # ---------------------------------------------------------------------------
-# Look / colors (hex, AWTRIX style). RL's own team colors are blue/orange.
+# Colors (AWTRIX hex). RL's own team colors are blue / orange.
 # ---------------------------------------------------------------------------
-BLUE = "#1C7DF7"      # team 0
-ORANGE = "#F17820"    # team 1
-BLUE_HI = "#8CC6FF"   # team 0, brightened (just scored)
-ORANGE_HI = "#FFC08A"  # team 1, brightened (just scored)
+BLUE = "#1C7DF7"        # RL blue team
+ORANGE = "#FF6A00"      # RL orange team (saturated, reads true-orange on LEDs)
+BLUE_HI = "#8CC6FF"     # brightened (just scored)
+ORANGE_HI = "#FFA64D"
 WHITE = "#FFFFFF"
-CLOCK = "#AAAAAA"     # in-game clock, plenty of time
-AMBER = "#FFB300"     # clock under a minute
-RED = "#FF2A2A"       # clock in the final seconds / loss
-GREEN = "#22DD66"     # GO! / win
-DIM = "#555555"
-POST = "#FFD000"      # crossbar / post flash
-OT = "#FFD000"        # overtime accent
+CLOCK = "#AAAAAA"       # in-game clock, plenty of time
+AMBER = "#FFB300"       # clock under a minute
+RED = "#FF2A2A"         # clock in the final seconds
+GREEN = "#22DD66"       # GO!
+GOLD = "#FFD000"        # POST / overtime
+TRACK = "#101822"       # empty boost track
 
+# ---------------------------------------------------------------------------
 # Timings (seconds)
-CLOCK_REFRESH = 1.0   # how often to re-push the ticking clock
-FLASH_SECS = 4.0      # how long the score flashes after a goal
-POST_SECS = 1.6       # how long the POST banner blinks after a crossbar hit
-OT_NOTICE_SECS = 3.0  # how long the OVERTIME banner shows when OT begins
-START_SECS = 3.6      # kickoff "3 · 2 · 1 · GO!" countdown
-FINAL_SECS = 12.0     # how long the FINAL card holds before releasing the clock
-IDLE_RELEASE_SECS = 30.0  # if a live match goes silent this long, release the clock
+# ---------------------------------------------------------------------------
+CLOCK_REFRESH = 1.0      # how often to re-push the live score+clock
+GOAL_BANNER_SECS = 1.8   # blinking "GOAL!" in the scorer's color
+FLASH_SECS = 1.8         # then the score alone (both teams lit) before steady
+POST_SECS = 1.8          # "POST" banner after a crossbar hit
+OT_NOTICE_SECS = 2.6     # "OVERTIME" banner when OT begins
+BALL_SECS = 1.3          # soccer ball shown at kickoff, before the countdown
+START_SECS = 3.6         # kickoff "3 · 2 · 1 · GO!"
+FINAL_SECS = 12.0        # FINAL card hold before releasing the clock
+IDLE_RELEASE_SECS = 30.0  # release if a live match goes silent this long
+BOOST_ALT_SECS = 3.5     # when boost mode is on, alternate score<->boost this often
+
+# Features that can be turned off with --disable a,b,c
+ALL_FEATURES = {"countdown", "goal", "post", "overtime", "urgency", "boost"}
 
 
 def log(msg: str) -> None:
@@ -81,14 +63,22 @@ def fmt_clock(secs) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def boost_pct(v) -> int:
+    """RL boost as 0..100 (some builds report 0..255 — scale defensively)."""
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return 0
+    if v > 100:
+        v = round(v / 255 * 100)
+    return max(0, min(100, v))
+
+
 # ===========================================================================
-# Transports — turn a notify payload dict into something the clock receives.
-# Both expose .notify(dict) and .dismiss(). A "held" (hold:true) notify is a
-# full-screen takeover that stays until dismissed — that's our scoreboard.
+# Transports — .notify(dict) / .dismiss(). A held (hold:true) notify is a
+# full-screen takeover that stays until dismissed: that's our scoreboard.
 # ===========================================================================
 class HttpTransport:
-    """POST to the AWTRIX HTTP API. No broker, no extra packages."""
-
     def __init__(self, host: str) -> None:
         self.base = f"http://{host}".rstrip("/")
 
@@ -97,7 +87,7 @@ class HttpTransport:
                                      headers={"Content-Type": "application/json"})
         try:
             urllib.request.urlopen(req, timeout=4).read()
-        except Exception as e:  # noqa: BLE001 — never let the clock kill the loop
+        except Exception as e:  # noqa: BLE001
             log(f"http {path} failed: {type(e).__name__}: {e}")
 
     def notify(self, payload: dict) -> None:
@@ -108,16 +98,12 @@ class HttpTransport:
 
 
 class MqttTransport:
-    """Publish to <prefix>/notify on an MQTT broker the clock listens to."""
-
-    def __init__(self, host: str, port: int, user: str, password: str,
-                 prefix: str) -> None:
-        import paho.mqtt.client as mqtt  # lazy — only needed for --transport mqtt
+    def __init__(self, host, port, user, password, prefix) -> None:
+        import paho.mqtt.client as mqtt  # only for --transport mqtt
         self.notify_topic = f"{prefix}/notify"
         self.dismiss_topic = f"{prefix}/notify/dismiss"
         try:
-            c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
-                            client_id="clocket-league")
+            c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="clocket-league")
         except (AttributeError, TypeError):
             c = mqtt.Client(client_id="clocket-league")
         if user:
@@ -135,20 +121,14 @@ class MqttTransport:
 
 
 # ===========================================================================
-# Sources — yield NORMALIZED events the renderer understands:
-#   {"type":"start"}                                  match is beginning
-#   {"type":"tick","t0":int,"t1":int,"secs":int,"ot":bool}
-#   {"type":"goal"}                                   someone scored
-#   {"type":"crossbar"}                               ball hit the post/crossbar
-#   {"type":"end"}                                    match over (use last tick)
-#   {"type":"_connected"} / {"type":"_disconnected"}  link state
-#   None                                              idle tick (no data this poll)
+# Sources — yield NORMALIZED events:
+#   {"type":"start"}
+#   {"type":"tick","t0","t1","secs","ot","players":[{team,boost,you}]}
+#   {"type":"goal"} {"type":"crossbar"} {"type":"end"}
+#   {"type":"_connected"} {"type":"_disconnected"}   None=idle
 # A source is a generator that reconnects forever and never raises.
 # ===========================================================================
 def _find_complete_json(buf: str):
-    """Return (start, end_inclusive) of the next complete JSON object in buf, or
-    None. Brace-depth scanner that respects strings + escapes. RL concatenates
-    envelopes with no delimiters, so we frame them ourselves."""
     i, n = 0, len(buf)
     while i < n and buf[i] in " \r\n\t":
         i += 1
@@ -173,14 +153,20 @@ def _find_complete_json(buf: str):
     return None
 
 
-def _map_rl_envelope(obj: dict):
-    """RL Stats API envelope {"Event","Data"} -> normalized event (or None)."""
+def _is_you(name, pid, my_name, my_id) -> bool:
+    if my_id and pid and pid == my_id:
+        return True
+    if my_name and name and name.lstrip("@").lower() == my_name.lstrip("@").lower():
+        return True
+    return False
+
+
+def _map_rl_envelope(obj, my_name, my_id):
     event = obj.get("Event")
-    data = obj.get("Data")
-    raw = data
-    if isinstance(data, str):
+    raw = obj.get("Data")
+    if isinstance(raw, str):
         try:
-            raw = json.loads(data)
+            raw = json.loads(raw)
         except ValueError:
             raw = {}
     if not isinstance(raw, dict):
@@ -192,13 +178,16 @@ def _map_rl_envelope(obj: dict):
         teams = game.get("Teams") or []
         t0 = next((t for t in teams if t.get("TeamNum") == 0), {}) or {}
         t1 = next((t for t in teams if t.get("TeamNum") == 1), {}) or {}
-        return {
-            "type": "tick",
-            "t0": int(t0.get("Score", 0) or 0),
-            "t1": int(t1.get("Score", 0) or 0),
-            "secs": int(game.get("TimeSeconds", 0) or 0),
-            "ot": bool(game.get("bOvertime", False)),
-        }
+        players = [
+            {"team": p.get("TeamNum", 0), "boost": boost_pct(p.get("Boost")),
+             "you": _is_you(p.get("Name"), p.get("PrimaryId"), my_name, my_id)}
+            for p in (raw.get("Players") or [])
+        ]
+        return {"type": "tick", "t0": int(t0.get("Score", 0) or 0),
+                "t1": int(t1.get("Score", 0) or 0),
+                "t0name": t0.get("Name") or "", "t1name": t1.get("Name") or "",
+                "secs": int(game.get("TimeSeconds", 0) or 0),
+                "ot": bool(game.get("bOvertime", False)), "players": players}
     if event == "GoalScored":
         return {"type": "goal"}
     if event == "CrossbarHit":
@@ -208,8 +197,7 @@ def _map_rl_envelope(obj: dict):
     return None
 
 
-def rl_source(host: str, port: int, poll: float = 1.0):
-    """Read Rocket League's local Stats API TCP socket directly."""
+def rl_source(host, port, my_name, my_id, poll=1.0):
     while True:
         try:
             log(f"connecting to Rocket League Stats API at {host}:{port} ...")
@@ -236,27 +224,25 @@ def rl_source(host: str, port: int, poll: float = 1.0):
                         obj = json.loads(piece)
                     except ValueError:
                         continue
-                    ev = _map_rl_envelope(obj)
+                    ev = _map_rl_envelope(obj, my_name, my_id)
                     if ev:
                         yield ev
         except OSError as e:
-            log(f"Rocket League socket not available ({type(e).__name__}); "
-                f"is RL running with PacketSendRate>0? retrying...")
+            log(f"RL socket unavailable ({type(e).__name__}); is RL running with "
+                f"PacketSendRate>0? retrying...")
         finally:
             try:
                 sock.close()  # type: ignore[has-type]
             except Exception:
                 pass
         yield {"type": "_disconnected"}
-        # back off ~2s while still emitting idle ticks so the loop stays alive
         for _ in range(max(1, int(2 / poll))):
             time.sleep(poll)
             yield None
 
 
-def ballshark_source(ws_url: str, poll: float = 1.0):
-    """Read a running ballshark tracker's WebSocket."""
-    import websocket  # lazy — only needed for --source ballshark (websocket-client)
+def ballshark_source(ws_url, my_name, my_id, poll=1.0):
+    import websocket  # only for --source ballshark (websocket-client)
     while True:
         ws = None
         try:
@@ -277,25 +263,27 @@ def ballshark_source(ws_url: str, poll: float = 1.0):
                     m = json.loads(raw)
                 except ValueError:
                     continue
-                t = m.get("type")
-                d = m.get("data") or {}
+                t, d = m.get("type"), (m.get("data") or {})
                 if t == "match_start":
                     yield {"type": "start"}
                 elif t == "tick":
-                    yield {
-                        "type": "tick",
-                        "t0": int(d.get("team0_score", 0) or 0),
-                        "t1": int(d.get("team1_score", 0) or 0),
-                        "secs": int(d.get("time_seconds", 0) or 0),
-                        "ot": bool(d.get("is_overtime", False)),
-                    }
+                    players = [
+                        {"team": p.get("team_num", 0), "boost": boost_pct(p.get("boost")),
+                         "you": _is_you(p.get("name"), p.get("primary_id"), my_name, my_id)}
+                        for p in (d.get("players") or [])
+                    ]
+                    yield {"type": "tick", "t0": int(d.get("team0_score", 0) or 0),
+                           "t1": int(d.get("team1_score", 0) or 0),
+                           "t0name": d.get("team0_name") or "",
+                           "t1name": d.get("team1_name") or "",
+                           "secs": int(d.get("time_seconds", 0) or 0),
+                           "ot": bool(d.get("is_overtime", False)), "players": players}
                 elif t == "goal":
                     yield {"type": "goal"}
                 elif t == "crossbar":
                     yield {"type": "crossbar"}
                 elif t == "match_end":
-                    # ballshark replays the last match_end on connect — ignore it.
-                    if time.monotonic() - connected_at > 3.0:
+                    if time.monotonic() - connected_at > 3.0:  # skip replayed end
                         yield {"type": "end"}
         except Exception as e:  # noqa: BLE001
             log(f"ballshark link down ({type(e).__name__}); retrying...")
@@ -311,197 +299,274 @@ def ballshark_source(ws_url: str, poll: float = 1.0):
             yield None
 
 
-def demo_source(speed: float = 1.0):
-    """A scripted, looping match — no Rocket League required. Great for recording
-    a GIF: kickoff countdown, a comeback, a crossbar, overtime, a golden goal,
-    FINAL — then it loops. --demo-speed scales the pace."""
-    def nap(sec):
-        time.sleep(max(0.05, sec / speed))
+def demo_source(speed=1.0, once=False):
+    """A tight, scripted highlight match — no Rocket League needed. Rips through
+    every scene once: kickoff, goals (both teams), a crossbar, a late equalizer,
+    overtime, a golden goal, BLUE WINS. Loops unless `once`. For trying it / GIFs.
 
+    Includes fake 4v4 boost so --boost-mode can be demoed too."""
+    def nap(sec):
+        time.sleep(max(0.04, sec / speed))
+
+    def players(sec):
+        # 'you' + 3 team-0 mates, 4 on team 1; boost wobbles with the clock.
+        b = lambda k: boost_pct(20 + (sec * 7 + k * 33) % 80)
+        ps = [{"team": 0, "boost": b(0), "you": True}]
+        ps += [{"team": 0, "boost": b(i), "you": False} for i in (1, 2, 3)]
+        ps += [{"team": 1, "boost": b(i), "you": False} for i in (4, 5, 6, 7)]
+        return ps
+
+    def tick(t0, t1, secs, ot=False):
+        return {"type": "tick", "t0": t0, "t1": t1, "secs": secs, "ot": ot,
+                "t0name": "Blue", "t1name": "Orange", "players": players(secs)}
+
+    # (event, dwell) beats. "g0"/"g1"=goal by team, "x"=crossbar, numbers=clock
     while True:
         yield {"type": "_connected"}
+        nap(2.0)                              # lead-in so you can hit record
         yield {"type": "start"}
-        nap(START_SECS + 0.4)             # let the 3 · 2 · 1 · GO! play
+        nap(BALL_SECS + START_SECS + 0.2)     # soccer ball -> 3 · 2 · 1 · GO!
         t0 = t1 = 0
-        # game-second -> action: ("goal", team) | ("crossbar", None)
-        script = {
-            265: ("goal", 0),             # blue strikes first
-            205: ("crossbar", None),      # rang the post
-            165: ("goal", 1),             # orange answers
-            95:  ("goal", 1),             # orange takes the lead
-            20:  ("goal", 0),             # blue equalizes late! (on the 5s grid)
-        }
-        sec = 300
-        while sec >= 0:
-            act = script.get(sec)
-            if act:
-                kind, team = act
-                if kind == "goal":
-                    t0, t1 = (t0 + 1, t1) if team == 0 else (t0, t1 + 1)
-                    yield {"type": "tick", "t0": t0, "t1": t1, "secs": sec, "ot": False}
-                    nap(FLASH_SECS + 0.6)
-                else:
-                    yield {"type": "crossbar"}
-                    nap(POST_SECS + 0.5)
-            yield {"type": "tick", "t0": t0, "t1": t1, "secs": sec, "ot": False}
-            nap(0.45)
-            sec -= 5
-        # 2-2 at the buzzer -> OVERTIME (sudden death, clock counts up)
-        yield {"type": "tick", "t0": t0, "t1": t1, "secs": 0, "ot": True}
-        nap(OT_NOTICE_SECS + 0.6)
-        ot = 0
-        while ot < 35:
-            yield {"type": "tick", "t0": t0, "t1": t1, "secs": ot, "ot": True}
-            nap(0.45)
-            ot += 5
-        t0 += 1                           # golden goal — blue wins it
-        yield {"type": "tick", "t0": t0, "t1": t1, "secs": ot, "ot": True}
-        nap(FLASH_SECS + 0.8)
+        yield tick(t0, t1, 300); nap(1.6)     # 5:00
+        t0 += 1; yield tick(t0, t1, 268); nap(GOAL_BANNER_SECS + FLASH_SECS + 0.5)
+        yield tick(t0, t1, 250); nap(0.9)
+        yield {"type": "crossbar"}; nap(POST_SECS + 0.4)
+        yield tick(t0, t1, 232); nap(0.7)
+        t1 += 1; yield tick(t0, t1, 205); nap(GOAL_BANNER_SECS + FLASH_SECS + 0.5)
+        t1 += 1; yield tick(t0, t1, 150); nap(GOAL_BANNER_SECS + FLASH_SECS + 0.5)
+        yield tick(t0, t1, 52); nap(1.1)      # amber (<1:00)
+        yield tick(t0, t1, 8); nap(1.1)       # red (<:10)
+        t0 += 1; yield tick(t0, t1, 3); nap(GOAL_BANNER_SECS + FLASH_SECS + 0.6)  # 2-2!
+        yield tick(t0, t1, 0, ot=True); nap(OT_NOTICE_SECS + 0.4)   # OVERTIME
+        yield tick(t0, t1, 9, ot=True); nap(1.1)
+        yield tick(t0, t1, 17, ot=True); nap(1.1)
+        t0 += 1; yield tick(t0, t1, 21, ot=True); nap(GOAL_BANNER_SECS + FLASH_SECS + 0.6)
         yield {"type": "end"}
-        nap(FINAL_SECS + 2.5)             # hold FINAL, then loop
+        nap(FINAL_SECS + 2.0)
+        if once:
+            return
 
 
 # ===========================================================================
-# Renderer / state machine — decides what's on the matrix at any moment and
-# pushes it through the transport. Steady state = the in-game clock; a goal
-# shows the score EXCLUSIVELY (flashing) for a few seconds; a crossbar blinks
-# POST; OT shows an OVERTIME banner then an "OT m:ss" clock; the end shows FINAL.
+# Renderer / state machine
 # ===========================================================================
 class Scoreboard:
-    def __init__(self, transport, my_team=None) -> None:
+    def __init__(self, transport, *, disabled=None, boost_mode="off",
+                 team_names="normalize") -> None:
         self.tx = transport
-        self.my_team = my_team   # 0, 1, or None — drives WIN/LOSS on the FINAL card
+        self.disabled = set(disabled or ())
+        self.boost_mode = boost_mode if "boost" not in self.disabled else "off"
+        self.team_names = team_names   # "normalize" -> BLUE/ORANGE, "actual" -> real
         self.active = False
         self.t0 = self.t1 = 0
+        self.t0name = self.t1name = ""
         self.secs = 0
         self.ot = False
-        self.flash_team = None   # which team most recently scored (0/1) -> color
+        self.players = []
+        self.flash_team = None
         self.last_payload = None
         self.last_pub = 0.0
         self.last_data = 0.0
-        # window deadlines (monotonic)
-        self.start_until = 0.0
-        self.flash_until = 0.0   # goal: score shown exclusively
-        self.post_until = 0.0    # crossbar
-        self.ot_until = 0.0      # overtime banner
-        self.final_until = 0.0   # FINAL card
+        self.ball_until = 0.0     # soccer ball at kickoff
+        self.goal_until = 0.0     # "GOAL!" banner
+        self.flash_until = 0.0    # score-only emphasis
+        self.post_until = 0.0
+        self.ot_until = 0.0
+        self.start_until = 0.0    # end of the 3-2-1 countdown
+        self.final_until = 0.0
+
+    def on(self, feature: str) -> bool:
+        return feature not in self.disabled
 
     # -- payload builders --------------------------------------------------
     @staticmethod
-    def _held(text, *, center=True, color=None, blink=0):
-        p = {"text": text, "hold": True, "stack": False, "wakeup": True,
-             "center": center, "pushIcon": 0}
+    def _held(text, *, center=True, color=None, blink=0, draw=None):
+        p = {"hold": True, "stack": False, "wakeup": True, "center": center,
+             "pushIcon": 0}
+        if draw is not None:
+            p["draw"] = draw
+            p["text"] = ""
+        else:
+            p["text"] = text
         if color:
             p["color"] = color
         if blink:
             p["blinkText"] = blink
         return p
 
-    def _clock_card(self):
-        # Clock gains urgency as time runs out: gray -> amber under 1:00 ->
-        # red+blink in the final 10s. Overtime (sudden death) is always gold.
+    def _live_card(self):
+        """Score (blue-orange, always prominent) + the clock. OT shows '+m:ss'."""
+        frags = [{"t": str(self.t0), "c": BLUE}, {"t": "-", "c": WHITE},
+                 {"t": str(self.t1), "c": ORANGE}]
         if self.ot:
-            return self._held([{"t": "OT ", "c": OT},
-                               {"t": fmt_clock(self.secs), "c": OT}], blink=600)
+            frags.append({"t": " +" + fmt_clock(self.secs), "c": GOLD})
+            return self._held(frags)
         s = max(0, int(self.secs))
-        if s <= 10:
+        if self.on("urgency") and s <= 10:
             col, blink = RED, 500
-        elif s <= 60:
+        elif self.on("urgency") and s <= 60:
             col, blink = AMBER, 0
         else:
             col, blink = CLOCK, 0
-        return self._held([{"t": fmt_clock(s), "c": col}], blink=blink)
+        frags.append({"t": " " + fmt_clock(s), "c": col})
+        return self._held(frags, blink=blink)
 
-    def _score_card(self, blink):
-        # The team that just scored is brightened; the other is dimmed, so a
-        # glance tells you WHO scored. Score is shown exclusively (no clock).
-        c0 = BLUE_HI if self.flash_team == 0 else (DIM if self.flash_team == 1 else BLUE)
-        c1 = ORANGE_HI if self.flash_team == 1 else (DIM if self.flash_team == 0 else ORANGE)
-        frags = [{"t": str(self.t0), "c": c0}, {"t": "-", "c": WHITE},
-                 {"t": str(self.t1), "c": c1}]
-        return self._held(frags, blink=blink and 400)
+    def _goal_banner(self):
+        col = BLUE if self.flash_team == 0 else ORANGE
+        return self._held("GOAL!", color=col, blink=350)
+
+    def _score_only(self):
+        c0 = BLUE_HI if self.flash_team == 0 else BLUE   # both teams stay lit
+        c1 = ORANGE_HI if self.flash_team == 1 else ORANGE
+        return self._held([{"t": str(self.t0), "c": c0}, {"t": "-", "c": WHITE},
+                           {"t": str(self.t1), "c": c1}], blink=400)
+
+    def _team_label(self, team):
+        """BLUE/ORANGE, or the actual lobby name if --team-names actual."""
+        nm = (self.t0name if team == 0 else self.t1name).strip()
+        if self.team_names == "actual" and nm and nm.lower() not in ("blue", "orange"):
+            return nm.upper()[:12]
+        return "BLUE" if team == 0 else "ORANGE"
 
     def _final_card(self):
-        c0 = BLUE if self.t0 >= self.t1 else DIM
-        c1 = ORANGE if self.t1 >= self.t0 else DIM
-        # If you told us your team, say WIN/LOSS; otherwise just FINAL.
-        label, lcolor = "FINAL ", WHITE
-        if self.my_team in (0, 1) and self.t0 != self.t1:
-            won = (self.my_team == 0) == (self.t0 > self.t1)
-            label, lcolor = ("WIN ", GREEN) if won else ("LOSS ", RED)
-        frags = [{"t": label, "c": lcolor}, {"t": str(self.t0), "c": c0},
-                 {"t": "-", "c": WHITE}, {"t": str(self.t1), "c": c1}]
-        return self._held(frags, blink=300 if lcolor == GREEN else 0)
+        if self.t0 == self.t1:
+            frags = [{"t": "FINAL ", "c": WHITE}, {"t": str(self.t0), "c": BLUE},
+                     {"t": "-", "c": WHITE}, {"t": str(self.t1), "c": ORANGE}]
+            return self._held(frags)
+        wteam = 0 if self.t0 > self.t1 else 1
+        wcol = BLUE if wteam == 0 else ORANGE
+        c0 = BLUE if self.t0 > self.t1 else WHITE
+        c1 = ORANGE if self.t1 > self.t0 else WHITE
+        frags = [{"t": self._team_label(wteam) + " WINS ", "c": wcol},
+                 {"t": str(self.t0), "c": c0}, {"t": "-", "c": WHITE},
+                 {"t": str(self.t1), "c": c1}]
+        return self._held(frags, center=False, blink=300)
 
-    def _countdown_card(self, now):
-        """Kickoff '3 · 2 · 1 · GO!' over the start window."""
+    def _ball_card(self):
+        """A little soccer ball at kickoff: white ball + black pentagon."""
+        cx = 15
+        draw = [
+            {"dfc": [cx, 4, 3, WHITE]},                       # white ball
+            {"dp": [cx, 4, "#000000"]},                       # center pentagon
+            {"dp": [cx - 1, 3, "#000000"]}, {"dp": [cx + 1, 3, "#000000"]},
+            {"dp": [cx - 1, 5, "#000000"]}, {"dp": [cx + 1, 5, "#000000"]},
+            {"dp": [cx - 3, 4, "#000000"]}, {"dp": [cx + 3, 4, "#000000"]},
+        ]
+        return self._held(None, draw=draw)
+
+    def _countdown(self, now):
         rem = self.start_until - now
         if rem <= 0.6:
             return self._held("GO!", color=GREEN, blink=400)
-        n = min(3, max(1, int(rem + 0.0)))   # 3.6..0.6 -> 3,2,1
-        return self._held(str(n), color=WHITE)
+        return self._held(str(min(3, max(1, int(rem)))), color=WHITE)
+
+    # -- boost meters ------------------------------------------------------
+    def _your_team(self):
+        me = next((p for p in self.players if p.get("you")), None)
+        return me["team"] if me else None
+
+    def _boost_card(self):
+        if self.boost_mode == "self":
+            me = next((p for p in self.players if p.get("you")), None)
+            if not me:
+                return self._live_card()
+            w = round(me["boost"] / 100 * 32)            # fills left -> right
+            col = BLUE if me["team"] == 0 else ORANGE
+            draw = [{"df": [0, 0, 32, 8, TRACK]}]
+            if w > 0:
+                draw.append({"df": [0, 0, w, 8, col]})
+            return self._held(None, draw=draw)
+        # team: up to 3 teammates (everybody but you), vertical, fill top->bottom
+        my = self._your_team()
+        mates = [p for p in self.players if p.get("team") == my and not p.get("you")][:3]
+        if not mates:
+            return self._live_card()
+        col = BLUE if my == 0 else ORANGE
+        draw = []
+        xs = [0, 11, 22]
+        for i, p in enumerate(mates):
+            x = xs[i]
+            draw.append({"df": [x, 0, 9, 8, TRACK]})
+            h = round(p["boost"] / 100 * 8)
+            if h > 0:
+                draw.append({"df": [x, 0, 9, h, col]})
+        return self._held(None, draw=draw)
 
     def _render(self, now):
-        """Return the payload that should be on the matrix right now."""
-        if now < self.start_until:
-            return self._countdown_card(now)
+        if self.on("countdown") and now < self.ball_until:
+            return self._ball_card()
+        if self.on("countdown") and now < self.start_until:
+            return self._countdown(now)
+        if self.on("goal") and now < self.goal_until:
+            return self._goal_banner()
         if now < self.flash_until:
-            return self._score_card(blink=True)        # goal: score exclusively
-        if now < self.post_until:
-            return self._held("POST", color=POST, blink=300)
-        if now < self.ot_until:
-            return self._held("OVERTIME", center=False, color=OT, blink=400)
-        return self._clock_card()
+            return self._score_only()
+        if self.on("post") and now < self.post_until:
+            return self._held("POST", color=GOLD, blink=300)
+        if self.on("overtime") and now < self.ot_until:
+            return self._held("OVERTIME", center=False, color=GOLD, blink=400)
+        if self.boost_mode != "off" and self.players and int(now / BOOST_ALT_SECS) % 2:
+            return self._boost_card()
+        return self._live_card()
 
     def _publish(self, payload, now, force=False):
         key = json.dumps(payload, sort_keys=True)
         if not force and key == self.last_payload and (now - self.last_pub) < CLOCK_REFRESH:
             return
         self.tx.notify(payload)
-        self.last_payload = key
-        self.last_pub = now
+        self.last_payload, self.last_pub = key, now
 
     # -- event handlers ----------------------------------------------------
+    def _reset_windows(self):
+        self.ball_until = self.goal_until = self.flash_until = self.post_until = 0.0
+        self.ot_until = self.start_until = self.final_until = 0.0
+
     def on_start(self, now):
         self.active = True
         self.t0 = self.t1 = 0
         self.secs = 0
         self.ot = False
         self.flash_team = None
-        self.start_until = now + START_SECS
-        self.flash_until = self.post_until = self.ot_until = self.final_until = 0.0
+        self._reset_windows()
+        self.ball_until = now + BALL_SECS                 # ball, then countdown
+        self.start_until = self.ball_until + START_SECS
         self.last_data = now
         log("match starting")
         self._publish(self._render(now), now, force=True)
 
     def on_tick(self, ev, now):
         self.active = True
-        self.final_until = 0.0      # a live tick supersedes any FINAL card
+        self.final_until = 0.0
         self.last_data = now
-        scored0 = ev["t0"] > self.t0
-        scored1 = ev["t1"] > self.t1
+        self.players = ev.get("players") or self.players
+        if ev.get("t0name"):
+            self.t0name = ev["t0name"]
+        if ev.get("t1name"):
+            self.t1name = ev["t1name"]
+        scored0, scored1 = ev["t0"] > self.t0, ev["t1"] > self.t1
         goal = scored0 or scored1
         entering_ot = ev["ot"] and not self.ot
         self.t0, self.t1, self.secs, self.ot = ev["t0"], ev["t1"], ev["secs"], ev["ot"]
         if goal:
             self.flash_team = 0 if scored0 else 1
-            self.flash_until = now + FLASH_SECS
+            self.goal_until = now + GOAL_BANNER_SECS
+            self.flash_until = now + GOAL_BANNER_SECS + FLASH_SECS
             log(f"GOAL ({'blue' if scored0 else 'orange'}) -> {self.t0}-{self.t1}"
                 f"{' OT' if self.ot else ''}")
         if entering_ot:
-            # Show the OVERTIME banner AFTER any goal flash (OT starts right after
-            # a tying goal), so both the score and the banner get their moment.
             self.ot_until = max(now, self.flash_until) + OT_NOTICE_SECS
             log("OVERTIME")
         self._publish(self._render(now), now, force=goal or entering_ot)
 
     def on_goal(self, now):
-        # Explicit goal event (RL fires this alongside the score change).
-        self.flash_until = now + FLASH_SECS
+        self.goal_until = now + GOAL_BANNER_SECS
+        self.flash_until = now + GOAL_BANNER_SECS + FLASH_SECS
         self.last_data = now
         self._publish(self._render(now), now, force=True)
 
     def on_crossbar(self, now):
+        if not self.on("post"):
+            return
         self.post_until = now + POST_SECS
         self.last_data = now
         log("POST (crossbar)")
@@ -512,13 +577,11 @@ class Scoreboard:
             return
         log(f"FINAL {self.t0}-{self.t1}")
         self.active = False
+        self._reset_windows()
         self.final_until = now + FINAL_SECS
-        self.flash_until = self.post_until = self.ot_until = self.start_until = 0.0
         self._publish(self._final_card(), now, force=True)
 
     def on_idle(self, now):
-        """Called on every poll with no new data: refresh clock, expire windows,
-        release the FINAL card, and watchdog a match that went silent."""
         if self.final_until:
             if now >= self.final_until:
                 self.tx.dismiss()
@@ -529,8 +592,8 @@ class Scoreboard:
         if self.active:
             if now - self.last_data > IDLE_RELEASE_SECS:
                 self.release("match went silent")
-                return
-            self._publish(self._render(now), now)
+            else:
+                self._publish(self._render(now), now)
 
     def release(self, reason):
         if self.active or self.final_until or self.last_payload:
@@ -546,7 +609,6 @@ class Scoreboard:
 # Wiring
 # ===========================================================================
 def load_dotenv(path=".env"):
-    """Tiny .env loader (KEY=VALUE per line); does not overwrite real env vars."""
     try:
         with open(path) as f:
             for line in f:
@@ -567,16 +629,23 @@ def build_args():
         description="Live Rocket League scoreboard on an AWTRIX pixel clock.")
     p.add_argument("--source", choices=["rl", "ballshark", "demo"],
                    default=e("CL_SOURCE", "rl"),
-                   help="where match data comes from (rl=RL's socket [default], "
-                        "ballshark=tracker WS, demo=scripted match for a GIF)")
+                   help="match data: rl (RL's socket, default), ballshark (tracker WS), demo")
     p.add_argument("--transport", choices=["http", "mqtt"],
-                   default=e("CL_TRANSPORT", "http"),
-                   help="how to reach the clock (default: http)")
-    p.add_argument("--my-team", choices=["blue", "orange"],
-                   default=e("CL_MY_TEAM", "") or None,
-                   help="your team -> the FINAL card shows WIN/LOSS instead of FINAL")
-    p.add_argument("--demo-speed", type=float, default=float(e("CL_DEMO_SPEED", "1.0")),
-                   help="--source demo pacing multiplier (higher = faster)")
+                   default=e("CL_TRANSPORT", "http"), help="how to reach the clock")
+    p.add_argument("--disable", default=e("CL_DISABLE", ""),
+                   help="comma list of features to turn off: " + ",".join(sorted(ALL_FEATURES)))
+    p.add_argument("--team-names", choices=["normalize", "actual"],
+                   default=e("CL_TEAM_NAMES", "normalize"),
+                   help="FINAL card: normalize=BLUE/ORANGE WINS (default), "
+                        "actual=use the real lobby team name")
+    p.add_argument("--boost-mode", choices=["off", "self", "team"],
+                   default=e("CL_BOOST_MODE", "off"),
+                   help="show a boost meter (alternates with the score): self=your boost "
+                        "(L->R bar), team=teammates' boost (vertical bars). Needs --player-name.")
+    p.add_argument("--player-name", default=e("RL_PLAYER_NAME", ""),
+                   help="your in-game name, to find 'you' for boost mode")
+    p.add_argument("--player-id", default=e("RL_PLAYER_PRIMARY_ID", ""),
+                   help="your PrimaryId (Steam|..|0 etc.), alternative to --player-name")
     # rl source
     p.add_argument("--rl-host", default=e("RL_HOST", "127.0.0.1"))
     p.add_argument("--rl-port", type=int, default=int(e("RL_PORT", "49123")))
@@ -584,14 +653,16 @@ def build_args():
     p.add_argument("--ballshark-ws", default=e("BALLSHARK_WS", "ws://127.0.0.1:5050/ws"))
     # http transport
     p.add_argument("--clock-host", default=e("CLOCK_HOST", ""),
-                   help="AWTRIX clock IP/host for --transport http (e.g. 192.168.1.50)")
+                   help="AWTRIX clock IP/host for --transport http")
     # mqtt transport
     p.add_argument("--mqtt-host", default=e("MQTT_HOST", "127.0.0.1"))
     p.add_argument("--mqtt-port", type=int, default=int(e("MQTT_PORT", "1883")))
     p.add_argument("--mqtt-user", default=e("MQTT_USER", ""))
     p.add_argument("--mqtt-pass", default=e("MQTT_PASS", ""))
-    p.add_argument("--awtrix-prefix", default=e("AWTRIX_PREFIX", "awtrix"),
-                   help="AWTRIX MQTT prefix (its uid, e.g. awtrix_11d5f8)")
+    p.add_argument("--awtrix-prefix", default=e("AWTRIX_PREFIX", "awtrix"))
+    # demo
+    p.add_argument("--demo-speed", type=float, default=float(e("CL_DEMO_SPEED", "1.0")))
+    p.add_argument("--demo-once", action="store_true", help="play the demo once and exit")
     return p.parse_args()
 
 
@@ -602,36 +673,39 @@ def make_transport(a):
         log(f"transport: http -> {a.clock_host}")
         return HttpTransport(a.clock_host)
     log(f"transport: mqtt -> {a.mqtt_host}:{a.mqtt_port} prefix={a.awtrix_prefix}")
-    return MqttTransport(a.mqtt_host, a.mqtt_port, a.mqtt_user, a.mqtt_pass,
-                         a.awtrix_prefix)
+    return MqttTransport(a.mqtt_host, a.mqtt_port, a.mqtt_user, a.mqtt_pass, a.awtrix_prefix)
 
 
 def make_source(a):
     if a.source == "demo":
-        log(f"source: demo (scripted match, speed={a.demo_speed})")
-        return demo_source(a.demo_speed)
+        log(f"source: demo (speed={a.demo_speed}{', once' if a.demo_once else ''})")
+        return demo_source(a.demo_speed, once=a.demo_once)
     if a.source == "rl":
         log(f"source: rl -> {a.rl_host}:{a.rl_port}")
-        return rl_source(a.rl_host, a.rl_port)
+        return rl_source(a.rl_host, a.rl_port, a.player_name, a.player_id)
     log(f"source: ballshark -> {a.ballshark_ws}")
-    return ballshark_source(a.ballshark_ws)
+    return ballshark_source(a.ballshark_ws, a.player_name, a.player_id)
 
 
 def main():
     a = build_args()
+    disabled = {x.strip() for x in a.disable.split(",") if x.strip()}
+    bad = disabled - ALL_FEATURES
+    if bad:
+        sys.exit(f"error: unknown --disable feature(s): {', '.join(bad)}")
     tx = make_transport(a)
-    my_team = {"blue": 0, "orange": 1}.get(a.my_team)
-    board = Scoreboard(tx, my_team=my_team)
+    board = Scoreboard(tx, disabled=disabled, boost_mode=a.boost_mode,
+                       team_names=a.team_names)
+    if disabled:
+        log("disabled: " + ", ".join(sorted(disabled)))
+    if board.boost_mode != "off":
+        log(f"boost mode: {board.boost_mode}")
 
     stop = {"flag": False}
+    signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
+    signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
 
-    def _shutdown(*_):
-        stop["flag"] = True
-
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
-
-    log("clocket-league running — play Rocket League. Ctrl-C to stop.")
+    log("running — play Rocket League. Ctrl-C to stop.")
     src = make_source(a)
     try:
         for ev in src:

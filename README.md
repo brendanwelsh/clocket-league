@@ -1,158 +1,143 @@
 # clocket-league
 
-**Your live Rocket League match on a pixel clock.** The in-game clock ticks down,
-the score flashes on every goal, the display lights up `POST` when you ding the
-crossbar, you get an `OVERTIME` banner, and a `FINAL` card when it's done.
+**Your live Rocket League match on a pixel clock.** Score in team colors with the
+in-game clock, a blinking **GOAL!** in the scorer's color, **POST** when you ring
+the crossbar, overtime that counts up as **+0:42**, and a **BLUE WINS 3-2** finish.
 
-No tracker account. No cloud. No browser. It reads Rocket League's *own* local
+No tracker account, no cloud, no browser — it reads Rocket League's *own* local
 Stats API and talks straight to your clock over your LAN.
 
 ![clocket-league on an Ulanzi TC001](demo.gif)
 
-What you see, start to finish:
+---
 
-```
- kickoff →  3 · 2 · 1 · GO!
-   live  →  3:24            clock ticks; goes amber under 1:00, red in the last 10s
-   goal  →  2-1             score flashes; the team that scored lights up brighter
-crossbar →  POST            blinks gold when you ring the post
-overtime →  OVERTIME → OT 0:42   sudden death, gold
-   end   →  FINAL 3-2       (or WIN / LOSS if you tell it your team)
-```
+## What it shows
+
+| Moment | On the clock |
+|---|---|
+| Kickoff | a soccer ball, then **3 · 2 · 1 · GO!** |
+| During play | **`2-1  3:24`** — score in blue/orange, clock gray → **amber** under 1:00 → **red** in the last 10s |
+| Goal | **`GOAL!`** blinks in the scoring team's color, then the new score |
+| Crossbar | **`POST`** blinks gold |
+| Overtime | **`OVERTIME`**, then **`2-2 +0:42`** counting up (gold) |
+| Full time | **`BLUE WINS 3-2`** (or the real team name), then back to normal |
+| Optional | boost meters — your boost, or your teammates' |
 
 ---
 
-## What you need
+## Prerequisites
 
-- An **Ulanzi TC001** (~$60) or any 32×8 **AWTRIX 3** device, on your WiFi.
-  Flash AWTRIX 3 and note its IP: <https://blueforcer.github.io/awtrix3/>
-- **Rocket League** on a PC, with the Stats API turned on (one-time, below).
-- **Python 3.9+** on the same PC.
+1. **An AWTRIX 3 clock** — an [Ulanzi TC001](https://www.ulanzi.com/products/ulanzi-pixel-smart-clock-2882)
+   (~$60) or any 32×8 AWTRIX device, on your WiFi. Flash AWTRIX 3 and note its IP:
+   <https://blueforcer.github.io/awtrix3/>
+2. **Rocket League on a PC** (Steam or Epic — the Stats API is PC-only).
+3. **Python 3.9+** on that PC.
 
-That's it. The default mode needs **zero extra Python packages**.
+The default setup needs **no extra Python packages**.
 
-## 1. Turn on Rocket League's Stats API (once)
+## Install
 
-Rocket League ships with a local Stats API; you just enable it. Edit (create if
-missing) this file in your RL install:
+```bash
+git clone https://github.com/brendanwelsh/clocket-league
+cd clocket-league
+```
+
+Optional extras (only if you use them):
+```bash
+pip install paho-mqtt        # only for --transport mqtt
+pip install websocket-client # only for --source ballshark
+```
+
+## Turn on Rocket League's Stats API (one time)
+
+Edit (create if missing) this file in your RL install:
 
 ```
 <RL install>\TAGame\Config\DefaultStatsAPI.ini
 ```
-
 ```ini
 [StatsAPI]
 Port=49123
 PacketSendRate=30
 ```
 
-Then **restart Rocket League** (the file is only read at launch). This is the
-official, documented API — <https://www.rocketleague.com/en/developer/stats-api>.
+Then **restart Rocket League** (it's only read at launch). This is the official
+Psyonix API — <https://www.rocketleague.com/en/developer/stats-api>.
 
-> Common RL install paths:
-> `C:\Program Files (x86)\Steam\steamapps\common\rocketleague\TAGame\Config\` (Steam)
+> Typical paths:
+> `C:\Program Files (x86)\Steam\steamapps\common\rocketleague\TAGame\Config\` (Steam),
 > or your Epic library's `rocketleague\TAGame\Config\`.
 
-## 2. Run it
+## Run
 
 ```bash
 python clocket_league.py --clock-host 192.168.1.50
 ```
 
-Replace `192.168.1.50` with your clock's IP. Now play. The match takes over the
-clock; between matches the clock goes back to normal.
+Use your clock's IP. Now play — the match takes over the clock, and it goes back
+to normal between matches. Prefer a file? Copy `.env.example` to `.env`.
 
-Prefer not to pass flags? Copy `.env.example` to `.env` and set `CLOCK_HOST=...`.
-
-### See it without Rocket League (demo mode)
-
-Want to try it, or record a clip? Demo mode plays a full scripted match on a
-loop — kickoff countdown, a comeback, a crossbar, overtime, a golden goal, the
-FINAL card — no RL needed:
-
+**See it without Rocket League** (and record the GIF):
 ```bash
 python clocket_league.py --source demo --clock-host 192.168.1.50
-# --demo-speed 1.5 to go faster
+# --demo-once to play it through once; --demo-speed 1.5 to go faster
 ```
 
-*(The `demo.gif` above was recorded straight off the clock in this mode.)*
+**Keep it running:** [`run.bat`](run.bat) (Windows / Task Scheduler) or
+[`clocket-league.service`](clocket-league.service) (Linux systemd).
 
 ---
 
 ## Options
 
 ```
---source rl|ballshark|demo where match data comes from (default: rl)
+--clock-host IP            your AWTRIX clock (for the default --transport http)
+--source rl|ballshark|demo where data comes from (default: rl)
 --transport http|mqtt      how to reach the clock (default: http)
---my-team blue|orange      show WIN/LOSS on the FINAL card instead of FINAL
---demo-speed 1.5           pace of --source demo (higher = faster)
-
-# rl source
---rl-host / --rl-port      RL Stats API socket (default 127.0.0.1:49123)
-
-# ballshark source
---ballshark-ws             ws URL of a running ballshark tracker
-
-# http transport
---clock-host               your AWTRIX clock's IP/host
-
-# mqtt transport
---mqtt-host/-port/-user/-pass
---awtrix-prefix            the clock's MQTT prefix (its uid, e.g. awtrix_11d5f8)
+--team-names normalize|actual   FINAL says BLUE/ORANGE WINS, or the real team name
+--disable a,b,c            turn features off: countdown,goal,post,overtime,urgency,boost
+--boost-mode off|self|team show a boost meter (needs --player-name)
+--player-name @You         your in-game name (for boost mode)
 ```
 
-Any flag can be an env var (see `.env.example`): `CLOCK_HOST`, `CL_SOURCE`,
-`CL_TRANSPORT`, `RL_HOST`, `RL_PORT`, `BALLSHARK_WS`, `MQTT_HOST`, etc.
+Everything has an env var too (see [`.env.example`](.env.example)).
 
-### Sources
+**Don't want POST?** `--disable post`. Want a calmer clock? `--disable urgency`.
 
-- **`rl`** (default) — reads Rocket League's local Stats API socket directly.
-  Self-contained; this is the one for everybody.
-- **`ballshark`** — reads a running [ballshark](https://github.com/brendanwelsh/ballshark)
-  tracker's WebSocket instead. Use this if you already run ballshark and don't
-  want two programs fighting over RL's socket.
+### Boost mode
 
-### Transports
+`--boost-mode self` draws **your** boost as a bar that fills left → right.
+`--boost-mode team` draws your **teammates'** boost as up to three vertical bars
+that fill top → bottom (4v4 = 3 mates). It alternates with the score every few
+seconds. Tell it who you are with `--player-name` (or `--player-id`).
 
-- **`http`** (default) — POSTs straight to the clock's HTTP API
-  (`http://<clock>/api/notify`). Needs nothing but the clock's IP, and no extra
-  Python packages.
-- **`mqtt`** — publishes to a broker your clock is subscribed to (AWTRIX
-  "HomeAssistant discovery" / custom MQTT). Needs `pip install paho-mqtt`.
+### Sources & transports
 
-`--source ballshark` needs `pip install websocket-client`.
+- **`--source rl`** (default) reads RL's local Stats API socket — nothing else needed.
+- **`--source ballshark`** reads a running [ballshark](https://github.com/brendanwelsh/ballshark)
+  tracker instead, so two programs don't fight over RL's socket.
+- **`--transport http`** (default) posts to the clock directly. **`--transport mqtt`**
+  publishes to a broker the clock listens on.
 
 ---
 
-## Run it forever
+## How it works (the short version)
 
-**Windows (Task Scheduler / shortcut):** see [`run.bat`](run.bat) — edit the
-clock IP, then run it (or add it to Task Scheduler "At log on").
+Rocket League streams little JSON events on a local socket while you play.
+clocket-league watches for the score, the clock, goals, crossbar hits, and start/
+end, and paints a single "held" notification on your AWTRIX clock — a full-screen
+takeover that stays up during the match and clears when it ends. It auto-reconnects
+and never leaves a stale score on the matrix.
 
-**Linux (systemd):** see [`clocket-league.service`](clocket-league.service).
-
----
-
-## How it works
-
-Rocket League streams length-prefixed JSON envelopes (`{"Event":...,"Data":...}`)
-on a local TCP socket. clocket-league frames them, watches for `UpdateState`
-(score + clock + overtime), `GoalScored`, `CrossbarHit`, and match start/end, and
-renders a held AWTRIX notification — a full-screen takeover that stays pinned
-while a match is live and is dismissed when it ends. It auto-reconnects and never
-leaves a stale score on the matrix (it releases on match end, on a silent match,
-on disconnect, and on exit).
+Want the gory details (the wire protocol, the event map, the rendering state
+machine)? See **[docs/TECHNICAL.md](docs/TECHNICAL.md)**.
 
 ## FAQ
 
-**Does this need BakkesMod?** No — it uses the official Psyonix Stats API, not the
-SOS plugin.
-
-**Console (PS5/Xbox/Switch)?** No — the Stats API is PC-only. Use `--source
-ballshark` only if you have ballshark fed some other way.
-
-**Connection refused?** RL isn't running, or `PacketSendRate` is `0` / the ini
-wasn't picked up. Re-check step 1 and restart RL.
+- **Needs BakkesMod?** No — official Psyonix Stats API, not the SOS plugin.
+- **Console?** No — the Stats API is PC-only.
+- **`connection refused`?** RL isn't running, or `PacketSendRate=0` / the ini
+  didn't take. Re-check the setup step and restart RL.
 
 ---
 
