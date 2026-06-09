@@ -95,21 +95,37 @@ python clocket_league.py --source demo --clock-host 192.168.1.50
 --source rl|ballshark|demo where data comes from (default: rl)
 --transport http|mqtt      how to reach the clock (default: http)
 --team-names normalize|actual   FINAL says BLUE/ORANGE WINS, or the real team name
---disable a,b,c            turn features off: countdown,goal,post,overtime,urgency,boost
---boost-mode off|self|team show a boost meter (needs --player-name)
---player-name @You         your in-game name (for boost mode)
+--disable a,b,c            turn features off: countdown,goal,post,overtime,urgency
+--screens ...              what the steady display shows (see below)
+--swap-secs 10             seconds per screen when --screens lists more than one
+--player-name @You         your in-game name (needed for the boost screens)
 ```
 
 Everything has an env var too (see [`.env.example`](.env.example)).
 
 **Don't want POST?** `--disable post`. Want a calmer clock? `--disable urgency`.
 
-### Boost mode
+### Screens (what the steady display shows)
 
-`--boost-mode self` draws **your** boost as a bar that fills left → right.
-`--boost-mode team` draws your **teammates'** boost as up to three vertical bars
-that fill top → bottom (4v4 = 3 mates). It alternates with the score every few
-seconds. Tell it who you are with `--player-name` (or `--player-id`).
+`--screens` is a comma list that the display rotates through, `--swap-secs` each:
+
+| value | shows |
+|---|---|
+| `score-time` | score **and** clock on one screen (default) |
+| `score` | just the score |
+| `time` | just the clock |
+| `boost` | **your** boost — a bar that fills left → right |
+| `boost-team` | your **teammates'** boost — up to 3 vertical bars, top → bottom (4v4) |
+
+Examples:
+```bash
+--screens score,time                       # swap score / clock every 10s
+--screens score-time,boost,boost-team      # score+clock, then your boost, then mates'
+--screens score,time,boost --swap-secs 8
+```
+The boost screens need to know who you are — set `--player-name` (or `--player-id`);
+if it can't find you, those screens are skipped. (Goals/POST/overtime still
+interrupt whatever screen is up.)
 
 ### Sources & transports
 

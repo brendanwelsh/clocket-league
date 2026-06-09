@@ -73,12 +73,14 @@ checked in priority order:
 
 ```
 kickoff ball  →  3·2·1·GO!  →  GOAL! banner  →  score-only flash
-              →  POST  →  OVERTIME banner  →  [boost meter ⇄] score+clock
+              →  POST  →  OVERTIME banner  →  steady screens
 ```
 
 Each event sets a deadline (`goal_until`, `post_until`, `ot_until`, …); `_render`
-shows the highest-priority window that hasn't expired, else the steady
-score+clock. Publishing is deduped (same payload within the refresh interval is
+shows the highest-priority window that hasn't expired, else the **steady
+screen**. The steady display is a rotation you configure with `--screens`
+(`score-time`, `score`, `time`, `boost`, `boost-team`), each shown for
+`--swap-secs`; `int(now / swap_secs) % len(screens)` picks the current one. Publishing is deduped (same payload within the refresh interval is
 skipped) so we don't spam the matrix, but the ticking clock naturally repaints
 ~1×/second.
 

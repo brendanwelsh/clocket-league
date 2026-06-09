@@ -48,10 +48,10 @@ BALL_SECS = 1.3          # soccer ball shown at kickoff, before the countdown
 START_SECS = 3.6         # kickoff "3 · 2 · 1 · GO!"
 FINAL_SECS = 12.0        # FINAL card hold before releasing the clock
 IDLE_RELEASE_SECS = 30.0  # release if a live match goes silent this long
-BOOST_ALT_SECS = 3.5     # when boost mode is on, alternate score<->boost this often
-
 # Features that can be turned off with --disable a,b,c
-ALL_FEATURES = {"countdown", "goal", "post", "overtime", "urgency", "boost"}
+ALL_FEATURES = {"countdown", "goal", "post", "overtime", "urgency"}
+# Steady "screens" you can rotate through (--screens), shown --swap-secs each
+ALL_SCREENS = {"score-time", "score", "time", "boost", "boost-team"}
 
 
 def log(msg: str) -> None:
@@ -351,11 +351,12 @@ def demo_source(speed=1.0, once=False):
 # Renderer / state machine
 # ===========================================================================
 class Scoreboard:
-    def __init__(self, transport, *, disabled=None, boost_mode="off",
+    def __init__(self, transport, *, disabled=None, screens=None, swap_secs=10.0,
                  team_names="normalize") -> None:
         self.tx = transport
         self.disabled = set(disabled or ())
-        self.boost_mode = boost_mode if "boost" not in self.disabled else "off"
+        self.screens = list(screens) if screens else ["score-time"]
+        self.swap_secs = max(2.0, swap_secs)
         self.team_names = team_names   # "normalize" -> BLUE/ORANGE, "actual" -> real
         self.active = False
         self.t0 = self.t1 = 0
@@ -443,16 +444,89 @@ class Scoreboard:
         return self._held(frags, center=False, blink=300)
 
     def _ball_card(self):
-        """A little soccer ball at kickoff: white ball + black pentagon."""
-        cx = 15
+        """A soccer ball at kickoff: white ball, black center pentagon, and seams
+        running out to black rim patches — reads as a soccer ball at 7px."""
+        cx, cy, K = 15, 4, "#000000"
         draw = [
-            {"dfc": [cx, 4, 3, WHITE]},                       # white ball
-            {"dp": [cx, 4, "#000000"]},                       # center pentagon
-            {"dp": [cx - 1, 3, "#000000"]}, {"dp": [cx + 1, 3, "#000000"]},
-            {"dp": [cx - 1, 5, "#000000"]}, {"dp": [cx + 1, 5, "#000000"]},
-            {"dp": [cx - 3, 4, "#000000"]}, {"dp": [cx + 3, 4, "#000000"]},
+            {"dfc": [cx, cy, 3, WHITE]},                      # white ball, r=3
+            # filled black center pentagon
+            {"dp": [cx, cy - 1, K]},
+            {"dp": [cx - 1, cy, K]}, {"dp": [cx, cy, K]}, {"dp": [cx + 1, cy, K]},
+            {"dp": [cx, cy + 1, K]},
+            # three seams from the pentagon out to the rim
+            {"dp": [cx, cy - 3, K]},                          # up to top rim
+            {"dp": [cx - 2, cy + 2, K]}, {"dp": [cx - 3, cy + 2, K]},   # lower-left
+            {"dp": [cx + 2, cy + 2, K]}, {"dp": [cx + 3, cy + 2, K]},   # lower-right
         ]
         return self._held(None, draw=draw)
+
+    # -- steady "screens" (rotated by --screens / --swap-secs) -------------
+    def _score_panel(self):
+        return self._held([{"t": str(self.t0), "c": BLUE}, {"t": "-", "c": WHITE},
+                           {"t": str(self.t1), "c": ORANGE}])
+
+    def _time_panel(self):
+        if self.ot:
+            return self._held([{"t": "+" + fmt_clock(self.secs), "c": GOLD}])
+        s = max(0, int(self.secs))
+        if self.on("urgency") and s <= 10:
+            col, blink = RED, 500
+        elif self.on("urgency") and s <= 60:
+            col, blink = AMBER, 0
+        else:
+            col, blink = CLOCK, 0
+        return self._held([{"t": fmt_clock(s), "c": col}], blink=blink)
+
+    def _boost_self(self):
+        me = next((p for p in self.players if p.get("you")), None)
+        if not me:
+            return None
+        w = round(me["boost"] / 100 * 32)                    # fills left -> right
+        col = BLUE if me["team"] == 0 else ORANGE
+        draw = [{"df": [0, 0, 32, 8, TRACK]}]
+        if w > 0:
+            draw.append({"df": [0, 0, w, 8, col]})
+        return self._held(None, draw=draw)
+
+    def _boost_team(self):
+        my = self._your_team()
+        mates = [p for p in self.players if p.get("team") == my and not p.get("you")][:3]
+        if my is None or not mates:
+            return None
+        col = BLUE if my == 0 else ORANGE
+        draw, xs = [], [0, 11, 22]
+        for i, p in enumerate(mates):                        # vertical, fill top->down
+            x = xs[i]
+            draw.append({"df": [x, 0, 9, 8, TRACK]})
+            h = round(p["boost"] / 100 * 8)
+            if h > 0:
+                draw.append({"df": [x, 0, 9, h, col]})
+        return self._held(None, draw=draw)
+
+    def _active_screens(self):
+        """Drop boost screens we can't draw (no 'you' / no teammates)."""
+        out = []
+        for s in self.screens:
+            if s in ("score-time", "score", "time"):
+                out.append(s)
+            elif s == "boost" and any(p.get("you") for p in self.players):
+                out.append(s)
+            elif s == "boost-team" and self._your_team() is not None and any(
+                    p.get("team") == self._your_team() and not p.get("you")
+                    for p in self.players):
+                out.append(s)
+        return out or ["score-time"]
+
+    def _screen_card(self, name):
+        if name == "score":
+            return self._score_panel()
+        if name == "time":
+            return self._time_panel()
+        if name == "boost":
+            return self._boost_self() or self._live_card()
+        if name == "boost-team":
+            return self._boost_team() or self._live_card()
+        return self._live_card()   # "score-time"
 
     def _countdown(self, now):
         rem = self.start_until - now
@@ -460,37 +534,9 @@ class Scoreboard:
             return self._held("GO!", color=GREEN, blink=400)
         return self._held(str(min(3, max(1, int(rem)))), color=WHITE)
 
-    # -- boost meters ------------------------------------------------------
     def _your_team(self):
         me = next((p for p in self.players if p.get("you")), None)
         return me["team"] if me else None
-
-    def _boost_card(self):
-        if self.boost_mode == "self":
-            me = next((p for p in self.players if p.get("you")), None)
-            if not me:
-                return self._live_card()
-            w = round(me["boost"] / 100 * 32)            # fills left -> right
-            col = BLUE if me["team"] == 0 else ORANGE
-            draw = [{"df": [0, 0, 32, 8, TRACK]}]
-            if w > 0:
-                draw.append({"df": [0, 0, w, 8, col]})
-            return self._held(None, draw=draw)
-        # team: up to 3 teammates (everybody but you), vertical, fill top->bottom
-        my = self._your_team()
-        mates = [p for p in self.players if p.get("team") == my and not p.get("you")][:3]
-        if not mates:
-            return self._live_card()
-        col = BLUE if my == 0 else ORANGE
-        draw = []
-        xs = [0, 11, 22]
-        for i, p in enumerate(mates):
-            x = xs[i]
-            draw.append({"df": [x, 0, 9, 8, TRACK]})
-            h = round(p["boost"] / 100 * 8)
-            if h > 0:
-                draw.append({"df": [x, 0, 9, h, col]})
-        return self._held(None, draw=draw)
 
     def _render(self, now):
         if self.on("countdown") and now < self.ball_until:
@@ -505,9 +551,9 @@ class Scoreboard:
             return self._held("POST", color=GOLD, blink=300)
         if self.on("overtime") and now < self.ot_until:
             return self._held("OVERTIME", center=False, color=GOLD, blink=400)
-        if self.boost_mode != "off" and self.players and int(now / BOOST_ALT_SECS) % 2:
-            return self._boost_card()
-        return self._live_card()
+        # steady: rotate through the configured screens, --swap-secs each
+        screens = self._active_screens()
+        return self._screen_card(screens[int(now / self.swap_secs) % len(screens)])
 
     def _publish(self, payload, now, force=False):
         key = json.dumps(payload, sort_keys=True)
@@ -638,10 +684,12 @@ def build_args():
                    default=e("CL_TEAM_NAMES", "normalize"),
                    help="FINAL card: normalize=BLUE/ORANGE WINS (default), "
                         "actual=use the real lobby team name")
-    p.add_argument("--boost-mode", choices=["off", "self", "team"],
-                   default=e("CL_BOOST_MODE", "off"),
-                   help="show a boost meter (alternates with the score): self=your boost "
-                        "(L->R bar), team=teammates' boost (vertical bars). Needs --player-name.")
+    p.add_argument("--screens", default=e("CL_SCREENS", "score-time"),
+                   help="steady display, a comma list rotated every --swap-secs: "
+                        "score-time (combined, default), score, time, boost (yours), "
+                        "boost-team. e.g. 'score,time' or 'score-time,boost,boost-team'")
+    p.add_argument("--swap-secs", type=float, default=float(e("CL_SWAP_SECS", "10")),
+                   help="seconds per screen when --screens has more than one (default 10)")
     p.add_argument("--player-name", default=e("RL_PLAYER_NAME", ""),
                    help="your in-game name, to find 'you' for boost mode")
     p.add_argument("--player-id", default=e("RL_PLAYER_PRIMARY_ID", ""),
@@ -693,13 +741,18 @@ def main():
     bad = disabled - ALL_FEATURES
     if bad:
         sys.exit(f"error: unknown --disable feature(s): {', '.join(bad)}")
+    screens = [s.strip() for s in a.screens.split(",") if s.strip()]
+    bad_s = set(screens) - ALL_SCREENS
+    if bad_s:
+        sys.exit(f"error: unknown --screens value(s): {', '.join(bad_s)} "
+                 f"(choose from {', '.join(sorted(ALL_SCREENS))})")
     tx = make_transport(a)
-    board = Scoreboard(tx, disabled=disabled, boost_mode=a.boost_mode,
-                       team_names=a.team_names)
+    board = Scoreboard(tx, disabled=disabled, screens=screens,
+                       swap_secs=a.swap_secs, team_names=a.team_names)
     if disabled:
         log("disabled: " + ", ".join(sorted(disabled)))
-    if board.boost_mode != "off":
-        log(f"boost mode: {board.boost_mode}")
+    log("screens: " + " · ".join(screens) +
+        (f" (swap {a.swap_secs:g}s)" if len(screens) > 1 else ""))
 
     stop = {"flag": False}
     signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
