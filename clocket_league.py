@@ -46,7 +46,8 @@ POST_SECS = 1.8          # "POST" banner after a crossbar hit
 OT_NOTICE_SECS = 2.6     # "OVERTIME" banner when OT begins
 BALL_SECS = 1.3          # soccer ball shown at kickoff, before the countdown
 START_SECS = 3.6         # kickoff "3 · 2 · 1 · GO!"
-FINAL_SECS = 12.0        # FINAL card hold before releasing the clock
+FINAL_NAME_SECS = 4.5    # "BLUE WINS!" shown first
+FINAL_SECS = 13.0        # then the score blinks, until this much has elapsed
 IDLE_RELEASE_SECS = 30.0  # release if a live match goes silent this long
 # Features that can be turned off with --disable a,b,c
 ALL_FEATURES = {"countdown", "goal", "post", "overtime", "urgency"}
@@ -72,6 +73,19 @@ def boost_pct(v) -> int:
     if v > 100:
         v = round(v / 255 * 100)
     return max(0, min(100, v))
+
+
+def step_boost(b: int) -> int:
+    """Evolve a boost value the way it moves in a real match: mostly draining as
+    you boost, with sudden jumps up when you grab pads (and the occasional full
+    100 off a big pad). Sawtooth, not a smooth wave. (Demo/showcase only.)"""
+    import random
+    r = random.random()
+    if r < 0.09:
+        return 100                                  # big pad
+    if r < 0.45:
+        return min(100, b + random.randint(8, 24))  # small pads / coasting
+    return max(0, b - random.randint(7, 18))        # boosting
 
 
 # ===========================================================================
@@ -305,15 +319,18 @@ def demo_source(speed=1.0, once=False):
     overtime, a golden goal, BLUE WINS. Loops unless `once`. For trying it / GIFs.
 
     Includes fake 4v4 boost so --boost-mode can be demoed too."""
+    import random
+    boosts = [random.randint(10, 90) for _ in range(8)]  # 'you'+3 mates, +4 opp
+
     def nap(sec):
         time.sleep(max(0.04, sec / speed))
 
     def players(sec):
-        # 'you' + 3 team-0 mates, 4 on team 1; boost wobbles with the clock.
-        b = lambda k: boost_pct(20 + (sec * 7 + k * 33) % 80)
-        ps = [{"team": 0, "boost": b(0), "you": True}]
-        ps += [{"team": 0, "boost": b(i), "you": False} for i in (1, 2, 3)]
-        ps += [{"team": 1, "boost": b(i), "you": False} for i in (4, 5, 6, 7)]
+        for i in range(8):
+            boosts[i] = step_boost(boosts[i])            # drain/refill like a real game
+        ps = [{"team": 0, "boost": boosts[0], "you": True}]
+        ps += [{"team": 0, "boost": boosts[i], "you": False} for i in (1, 2, 3)]
+        ps += [{"team": 1, "boost": boosts[i], "you": False} for i in (4, 5, 6, 7)]
         return ps
 
     def tick(t0, t1, secs, ot=False):
@@ -347,6 +364,113 @@ def demo_source(speed=1.0, once=False):
             return
 
 
+def run_showcase(tx, speed=1.0, loop=True):
+    """A guided tour: every screen/scene as its own labeled segment, separated by
+    a rolling soccer ball. Record it once and split the clip into one GIF per
+    segment. Reuses the real card builders so what you see is what you get."""
+    import math
+    from time import sleep
+    sb = Scoreboard(tx)
+    LABEL = "#00E5FF"
+
+    def nap(s):
+        sleep(max(0.03, s / speed))
+
+    def push(card, secs):
+        tx.notify(card)
+        nap(secs)
+
+    def label(text):
+        push(sb._held(text, center=False, color=LABEL), 1.8 + 0.12 * len(text))
+
+    def roll():
+        """A soccer ball rolling across the screen (pentagon spins as it goes)."""
+        ph = 0.0
+        for x in range(-4, 37, 2):
+            draw = [{"dfc": [x, 4, 3, WHITE]}, {"dp": [x, 4, "#000000"]}]
+            for k in range(5):
+                a = ph + k * 1.2566
+                draw.append({"dp": [x + round(1.4 * math.cos(a)),
+                                    4 + round(1.4 * math.sin(a)), "#000000"]})
+            tx.notify(sb._held(None, draw=draw))
+            ph += 0.9
+            nap(0.05)
+
+    while True:
+        # --- Kickoff: ball, then countdown ---
+        label("KICKOFF")
+        push(sb._ball_card(), 1.6)
+        for n in ("3", "2", "1"):
+            push(sb._held(n, color=WHITE), 0.85)
+        push(sb._held("GO!", color=GREEN, blink=400), 1.1)
+        roll()
+        # --- Score + clock together (default screen) ---
+        label("SCORE + CLOCK")
+        sb.t0, sb.t1 = 2, 1
+        for s in (212, 206, 200, 194):
+            sb.secs = s
+            push(sb._live_card(), 1.0)
+        roll()
+        # --- Score only ---
+        label("SCORE")
+        push(sb._score_panel(), 3.5)
+        roll()
+        # --- Clock only, with urgency ---
+        label("CLOCK")
+        sb.ot = False
+        for s in (95, 45, 9):
+            sb.secs = s
+            push(sb._time_panel(), 2.0)
+        roll()
+        # --- Goal (both teams) ---
+        label("GOAL")
+        sb.t0, sb.t1, sb.flash_team = 2, 1, 0
+        push(sb._goal_banner(), 1.6)
+        push(sb._score_only(), 1.6)
+        sb.t0, sb.t1, sb.flash_team = 2, 2, 1
+        push(sb._goal_banner(), 1.6)
+        push(sb._score_only(), 1.6)
+        roll()
+        # --- Post ---
+        label("POST")
+        push(sb._held("POST", color=GOLD, blink=300), 3.0)
+        roll()
+        # --- Overtime ---
+        label("OVERTIME")
+        push(sb._held("OVERTIME", center=False, color=GOLD, blink=400), 2.4)
+        sb.ot = True
+        for s in (4, 9, 14, 19):
+            sb.secs = s
+            push(sb._time_panel(), 1.0)
+        sb.ot = False
+        roll()
+        # --- Your boost (fills L->R, realistic flow) ---
+        label("YOUR BOOST")
+        b = 50
+        for _ in range(18):
+            b = step_boost(b)
+            sb.players = [{"team": 0, "boost": b, "you": True}]
+            push(sb._boost_self(), 0.38)
+        roll()
+        # --- Teammates' boost (vertical bars, fill bottom->top, realistic) ---
+        label("TEAM BOOST")
+        bs = [35, 75, 55]
+        for _ in range(20):
+            bs = [step_boost(x) for x in bs]
+            sb.players = ([{"team": 0, "boost": 0, "you": True}] +
+                          [{"team": 0, "boost": bs[i], "you": False} for i in range(3)])
+            push(sb._boost_team(), 0.38)
+        roll()
+        # --- Final: BLUE WINS! then the score blinks ---
+        label("FINAL")
+        sb.t0, sb.t1 = 3, 2
+        push(sb._final_name(), 3.6)
+        push(sb._final_score(), 4.0)
+        roll()
+        if not loop:
+            return
+
+
 # ===========================================================================
 # Renderer / state machine
 # ===========================================================================
@@ -374,6 +498,7 @@ class Scoreboard:
         self.post_until = 0.0
         self.ot_until = 0.0
         self.start_until = 0.0    # end of the 3-2-1 countdown
+        self.final_name_until = 0.0
         self.final_until = 0.0
 
     def on(self, feature: str) -> bool:
@@ -429,34 +554,31 @@ class Scoreboard:
             return nm.upper()[:12]
         return "BLUE" if team == 0 else "ORANGE"
 
-    def _final_card(self):
+    def _final_name(self):
+        """First beat: the winner, by name. Plays the full name (scrolls if long),
+        no score yet."""
         if self.t0 == self.t1:
-            frags = [{"t": "FINAL ", "c": WHITE}, {"t": str(self.t0), "c": BLUE},
-                     {"t": "-", "c": WHITE}, {"t": str(self.t1), "c": ORANGE}]
-            return self._held(frags)
+            return self._held("FULL TIME", center=False, color=WHITE)
         wteam = 0 if self.t0 > self.t1 else 1
         wcol = BLUE if wteam == 0 else ORANGE
-        c0 = BLUE if self.t0 > self.t1 else WHITE
-        c1 = ORANGE if self.t1 > self.t0 else WHITE
-        frags = [{"t": self._team_label(wteam) + " WINS ", "c": wcol},
-                 {"t": str(self.t0), "c": c0}, {"t": "-", "c": WHITE},
-                 {"t": str(self.t1), "c": c1}]
-        return self._held(frags, center=False, blink=300)
+        return self._held(self._team_label(wteam) + " WINS!", center=False, color=wcol)
+
+    def _final_score(self):
+        """Second beat: the score on its own, blinking (no scroll)."""
+        c0 = BLUE if self.t0 >= self.t1 else WHITE
+        c1 = ORANGE if self.t1 >= self.t0 else WHITE
+        return self._held([{"t": str(self.t0), "c": c0}, {"t": "-", "c": WHITE},
+                           {"t": str(self.t1), "c": c1}], blink=450)
 
     def _ball_card(self):
-        """A soccer ball at kickoff: white ball, black center pentagon, and seams
-        running out to black rim patches — reads as a soccer ball at 7px."""
-        cx, cy, K = 15, 4, "#000000"
+        """A little soccer ball at kickoff: white ball + black pentagon."""
+        cx, K = 15, "#000000"
         draw = [
-            {"dfc": [cx, cy, 3, WHITE]},                      # white ball, r=3
-            # filled black center pentagon
-            {"dp": [cx, cy - 1, K]},
-            {"dp": [cx - 1, cy, K]}, {"dp": [cx, cy, K]}, {"dp": [cx + 1, cy, K]},
-            {"dp": [cx, cy + 1, K]},
-            # three seams from the pentagon out to the rim
-            {"dp": [cx, cy - 3, K]},                          # up to top rim
-            {"dp": [cx - 2, cy + 2, K]}, {"dp": [cx - 3, cy + 2, K]},   # lower-left
-            {"dp": [cx + 2, cy + 2, K]}, {"dp": [cx + 3, cy + 2, K]},   # lower-right
+            {"dfc": [cx, 4, 3, WHITE]},
+            {"dp": [cx, 4, K]},
+            {"dp": [cx - 1, 3, K]}, {"dp": [cx + 1, 3, K]},
+            {"dp": [cx - 1, 5, K]}, {"dp": [cx + 1, 5, K]},
+            {"dp": [cx - 3, 4, K]}, {"dp": [cx + 3, 4, K]},
         ]
         return self._held(None, draw=draw)
 
@@ -494,13 +616,13 @@ class Scoreboard:
         if my is None or not mates:
             return None
         col = BLUE if my == 0 else ORANGE
-        draw, xs = [], [0, 11, 22]
-        for i, p in enumerate(mates):                        # vertical, fill top->down
+        draw, xs, w = [], [2, 13, 24], 6        # wide gaps between bars
+        for i, p in enumerate(mates):           # vertical, fill bottom -> up
             x = xs[i]
-            draw.append({"df": [x, 0, 9, 8, TRACK]})
+            draw.append({"df": [x, 0, w, 8, TRACK]})
             h = round(p["boost"] / 100 * 8)
             if h > 0:
-                draw.append({"df": [x, 0, 9, h, col]})
+                draw.append({"df": [x, 8 - h, w, h, col]})
         return self._held(None, draw=draw)
 
     def _active_screens(self):
@@ -565,7 +687,8 @@ class Scoreboard:
     # -- event handlers ----------------------------------------------------
     def _reset_windows(self):
         self.ball_until = self.goal_until = self.flash_until = self.post_until = 0.0
-        self.ot_until = self.start_until = self.final_until = 0.0
+        self.ot_until = self.start_until = 0.0
+        self.final_name_until = self.final_until = 0.0
 
     def on_start(self, now):
         self.active = True
@@ -624,8 +747,9 @@ class Scoreboard:
         log(f"FINAL {self.t0}-{self.t1}")
         self.active = False
         self._reset_windows()
-        self.final_until = now + FINAL_SECS
-        self._publish(self._final_card(), now, force=True)
+        self.final_name_until = now + FINAL_NAME_SECS   # "BLUE WINS!" first
+        self.final_until = now + FINAL_SECS             # then score blinks
+        self._publish(self._final_name(), now, force=True)
 
     def on_idle(self, now):
         if self.final_until:
@@ -634,6 +758,10 @@ class Scoreboard:
                 self.final_until = 0.0
                 self.last_payload = None
                 log("released")
+            elif now >= self.final_name_until:
+                self._publish(self._final_score(), now)   # second beat: score blink
+            else:
+                self._publish(self._final_name(), now)
             return
         if self.active:
             if now - self.last_data > IDLE_RELEASE_SECS:
@@ -673,9 +801,10 @@ def build_args():
     p = argparse.ArgumentParser(
         prog="clocket-league",
         description="Live Rocket League scoreboard on an AWTRIX pixel clock.")
-    p.add_argument("--source", choices=["rl", "ballshark", "demo"],
+    p.add_argument("--source", choices=["rl", "ballshark", "demo", "showcase"],
                    default=e("CL_SOURCE", "rl"),
-                   help="match data: rl (RL's socket, default), ballshark (tracker WS), demo")
+                   help="match data: rl (RL's socket, default), ballshark (tracker WS), "
+                        "demo (scripted match), showcase (labeled tour of every screen)")
     p.add_argument("--transport", choices=["http", "mqtt"],
                    default=e("CL_TRANSPORT", "http"), help="how to reach the clock")
     p.add_argument("--disable", default=e("CL_DISABLE", ""),
@@ -757,6 +886,17 @@ def main():
     stop = {"flag": False}
     signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
     signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
+
+    if a.source == "showcase":
+        log("showcase — a labeled tour of every screen; record + split into GIFs")
+        try:
+            run_showcase(tx, a.demo_speed, loop=not a.demo_once)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            board.release("shutdown")
+            log("bye")
+        return
 
     log("running — play Rocket League. Ctrl-C to stop.")
     src = make_source(a)

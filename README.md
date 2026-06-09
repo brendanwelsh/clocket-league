@@ -77,11 +77,15 @@ python clocket_league.py --clock-host 192.168.1.50
 Use your clock's IP. Now play — the match takes over the clock, and it goes back
 to normal between matches. Prefer a file? Copy `.env.example` to `.env`.
 
-**See it without Rocket League** (and record the GIF):
+**See it without Rocket League:**
 ```bash
-python clocket_league.py --source demo --clock-host 192.168.1.50
-# --demo-once to play it through once; --demo-speed 1.5 to go faster
+python clocket_league.py --source demo --clock-host 192.168.1.50      # a scripted match
+python clocket_league.py --source showcase --clock-host 192.168.1.50  # tour every screen
+# --demo-once plays once; --demo-speed 1.5 goes faster
 ```
+`showcase` walks every screen/scene as its own labeled segment, separated by a
+rolling soccer ball — handy for recording one clip and splitting it into a GIF
+per feature.
 
 **Keep it running:** [`run.bat`](run.bat) (Windows / Task Scheduler) or
 [`clocket-league.service`](clocket-league.service) (Linux systemd).
