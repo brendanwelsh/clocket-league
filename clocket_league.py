@@ -329,7 +329,7 @@ def demo_source(speed: float = 1.0):
             205: ("crossbar", None),      # rang the post
             165: ("goal", 1),             # orange answers
             95:  ("goal", 1),             # orange takes the lead
-            18:  ("goal", 0),             # blue equalizes late!
+            20:  ("goal", 0),             # blue equalizes late! (on the 5s grid)
         }
         sec = 300
         while sec >= 0:
