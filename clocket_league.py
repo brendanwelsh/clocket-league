@@ -597,11 +597,14 @@ class Scoreboard:
         me = next((p for p in self.players if p.get("you")), None)
         if not me:
             return None
-        w = round(me["boost"] / 100 * 32)                    # fills left -> right
+        pct = me["boost"]
+        w = round(pct / 100 * 32)                            # fills left -> right
         col = BLUE if me["team"] == 0 else ORANGE
         draw = [{"df": [0, 0, 32, 8, TRACK]}]
         if w > 0:
             draw.append({"df": [0, 0, w, 8, col]})
+        s = str(pct)                                          # the boost number on top
+        draw.append({"dt": [max(0, (32 - len(s) * 4) // 2), 1, s, WHITE]})
         return self._held(None, draw=draw)
 
     def _boost_team(self):
