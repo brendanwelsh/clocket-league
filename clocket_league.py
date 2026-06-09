@@ -24,12 +24,9 @@ import urllib.request
 # ---------------------------------------------------------------------------
 # Colors (AWTRIX hex). RL's own team colors are blue / orange.
 # ---------------------------------------------------------------------------
-BLUE = "#1C7DF7"        # RL blue team
-ORANGE = "#FF8000"      # RL orange team (true orange — 50% green reads orange on LEDs)
-BLUE_HI = "#8CC6FF"     # brightened (just scored)
-ORANGE_HI = "#FFB347"
-BLUE_DIM = "#0E2E5C"    # the non-scoring side during a goal
-ORANGE_DIM = "#4A2600"
+# The one and only RL blue / orange — used for EVERYTHING blue/orange.
+BLUE = "#1C7DF7"
+ORANGE = "#FF8000"
 WHITE = "#FFFFFF"
 CLOCK = "#AAAAAA"       # in-game clock, plenty of time
 AMBER = "#FFB300"       # clock under a minute
@@ -94,33 +91,22 @@ def _ball_draw(cx, cy=4, r=3):
     return _soccer(cx, cy, r, 0.0)
 
 
-def _fennec(x, color):
-    """A low, wide Fennec-style car (~8px), left edge at x."""
-    dark = "#1A1A1A"
+def _car(x, color):
+    """The car everyone liked: a little body + cockpit + two wheels."""
     return [
-        {"df": [x, 4, 8, 2, color]},          # wide flat body
-        {"df": [x + 2, 3, 4, 1, color]},      # low canopy
-        {"dp": [x + 1, 6, dark]}, {"dp": [x + 6, 6, dark]},  # wheels
+        {"df": [x, 4, 6, 2, color]},          # body
+        {"df": [x + 1, 3, 3, 1, color]},      # cockpit
+        {"dp": [x + 1, 6, "#444444"]}, {"dp": [x + 4, 6, "#444444"]},  # wheels
     ]
 
 
-def _car_ball_cards(cars, x0=-14, x1=44):
-    """Animation frames: soccer ball out front, car(s) chasing behind.
-    cars = [(x_offset, color), ...]."""
-    cards = []
-    for step in range(x0, x1, 2):
-        draw = []
-        for off, color in cars:
-            draw += _fennec(step + off, color)
-        draw += _soccer(step + 14, 4, 2, spin=step * 0.6)
-        cards.append({"draw": draw, "hold": True, "stack": False, "wakeup": True,
-                      "text": "", "center": True, "pushIcon": 0})
-    return cards
-
-
-def play_cars(tx, cars, sleep_fn, frame=0.05):
-    for c in _car_ball_cards(cars):
-        tx.notify(c)
+def play_car(tx, color, sleep_fn, frame=0.05):
+    """ONE car drives across pushing the soccer ball (ball ahead, with a gap)."""
+    for step in range(-12, 44, 2):
+        draw = _car(step, color)
+        draw += _soccer(step + 11, 4, 2, spin=step * 0.6)   # ball ahead of the car
+        tx.notify({"draw": draw, "hold": True, "stack": False, "wakeup": True,
+                   "text": "", "center": True, "pushIcon": 0})
         sleep_fn(frame)
 
 
@@ -428,10 +414,14 @@ def run_showcase(tx, speed=1.0, loop=True):
         tx.notify(card)
         nap(secs)
 
+    roll_n = [0]
+
     def roll():
-        """Transition: a blue AND an orange Fennec chase the soccer ball across.
-        No text labels — segments are separated by this so you can split cleanly."""
-        play_cars(tx, [(0, BLUE), (-10, ORANGE)], nap)
+        """Transition: ONE car pushes the soccer ball across (alternating blue /
+        orange so both show, never two at once). Splits the clip into segments."""
+        col = BLUE if roll_n[0] % 2 == 0 else ORANGE
+        roll_n[0] += 1
+        play_car(tx, col, nap)
 
     while True:
         # Kickoff: the cars drive by, THEN 3 · 2 · 1 · GO!
@@ -495,7 +485,7 @@ def run_showcase(tx, speed=1.0, loop=True):
         push(sb._held(sb._team_label(0 if sb.t0 > sb.t1 else 1), color=win_col), 2.0)
         push(sb._held("WINS!", color=win_col, blink=350), 2.2)
         push(sb._final_score(), 2.6)
-        play_cars(tx, [(0, win_col)], nap)          # drive the ball away
+        play_car(tx, win_col, nap)                  # the winner's car drives the ball away
         if not loop:
             return
 
@@ -571,12 +561,9 @@ class Scoreboard:
         return self._held("GOAL!", color=col, blink=350)
 
     def _score_only(self):
-        # The team that scored pops bright; the other side dims, so a goal is
-        # clearly THAT team's moment (great for whoever scored).
-        c0 = BLUE_HI if self.flash_team == 0 else BLUE_DIM
-        c1 = ORANGE_HI if self.flash_team == 1 else ORANGE_DIM
-        return self._held([{"t": str(self.t0), "c": c0}, {"t": "-", "c": WHITE},
-                           {"t": str(self.t1), "c": c1}], blink=400)
+        # Pure RL blue/orange, blinking. Who scored is shown by the GOAL! banner.
+        return self._held([{"t": str(self.t0), "c": BLUE}, {"t": "-", "c": WHITE},
+                           {"t": str(self.t1), "c": ORANGE}], blink=400)
 
     def _team_label(self, team):
         """BLUE/ORANGE, or the actual lobby name if --team-names actual."""
@@ -725,7 +712,7 @@ class Scoreboard:
         self._reset_windows()
         self.last_data = now
         log("match starting")
-        play_cars(self.tx, [(0, BLUE), (-10, ORANGE)], time.sleep, 0.04)  # kickoff drive-by
+        play_car(self.tx, BLUE, time.sleep, 0.04)         # kickoff drive-by (one car)
         now = time.monotonic()                            # time passed during the drive-by
         self.start_until = now + START_SECS               # then 3 · 2 · 1 · GO!
         self.last_data = now
@@ -783,8 +770,8 @@ class Scoreboard:
         if self.final_until:
             if now >= self.final_until:
                 if self.t0 != self.t1:                    # winner's car pushes the ball away
-                    play_cars(self.tx, [(0, BLUE if self.t0 > self.t1 else ORANGE)],
-                              time.sleep, 0.04)
+                    play_car(self.tx, BLUE if self.t0 > self.t1 else ORANGE,
+                             time.sleep, 0.04)
                 self.tx.dismiss()
                 self.final_until = 0.0
                 self.last_payload = None
