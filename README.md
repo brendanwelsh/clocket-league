@@ -68,60 +68,31 @@ Captured straight off an Ulanzi TC001.
 
 ## Setup
 
-Three one-time steps. You don't need to know how to code — you'll just copy a few
-things and paste them. Take it slow; it's about 5 minutes.
+Three one-time steps:
 
-### 1. Put AWTRIX on your clock
+1. **Flash AWTRIX 3 onto the clock.** Plug the TC001 in via USB‑C and use the
+   official browser flasher at <https://blueforcer.github.io/awtrix3/> — it walks
+   you through it. Connect it to WiFi and note the **IP address** it shows.
 
-The Ulanzi TC001 ships with its own software; you swap it for **AWTRIX 3** (free,
-open-source) so this tool can talk to it. Plug the clock into your PC with a USB‑C
-cable and follow the official flasher — it runs right in your web browser:
-👉 **<https://blueforcer.github.io/awtrix3/>** (open its **Quick start**).
+2. **Turn on Rocket League's Stats API.** Add these lines to
+   `…\rocketleague\TAGame\Config\DefaultStatsAPI.ini` (create it if missing), then
+   restart RL:
 
-During setup it connects the clock to your WiFi and shows an **IP address** (looks
-like `192.168.1.50`). **Write that number down — you'll need it.**
+   ```ini
+   [StatsAPI]
+   Port=49123
+   PacketSendRate=30
+   ```
 
-### 2. Switch on Rocket League's data feed
+3. **Run it.** With [Python 3.9+](https://www.python.org/downloads/) installed,
+   grab this repo (`git clone`, or **Code → Download ZIP**) and run it with your
+   clock's IP:
 
-Rocket League can share live match info on your own PC — you just turn it on once.
-Open this file (make it if it's not there) inside your Rocket League folder:
+   ```bash
+   python clocket_league.py --clock-host 192.168.1.50
+   ```
 
-```
-...\rocketleague\TAGame\Config\DefaultStatsAPI.ini
-```
-
-and put these three lines in it, then save:
-
-```ini
-[StatsAPI]
-Port=49123
-PacketSendRate=30
-```
-
-Then **fully close and reopen Rocket League.** (This is Rocket League's own
-official feature — nothing sketchy. Details: <https://www.rocketleague.com/en/developer/stats-api>.)
-
-### 3. Run clocket-league
-
-On the same PC:
-
-1. Install **[Python](https://www.python.org/downloads/)** — during install, tick
-   **"Add Python to PATH."**
-2. Download this project: the green **`< > Code`** button near the top of this
-   page → **Download ZIP** → unzip it.
-3. Open that folder, type `cmd` in the address bar (or right‑click → open a
-   terminal), and run this — swapping in **your clock's IP from step 1**:
-
-```bash
-python clocket_league.py --clock-host 192.168.1.50
-```
-
-Now jump into a match. The clock takes over with your scoreboard and goes back to
-normal when the match ends. Leave that window open while you play.
-
-> **Just want to watch it first?** Run
-> `python clocket_league.py --source demo --clock-host 192.168.1.50` — it plays a
-> pretend match on the clock, no Rocket League needed.
+Then play. To preview it without Rocket League, add `--source demo`.
 
 ---
 
