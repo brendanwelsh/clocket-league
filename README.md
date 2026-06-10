@@ -22,15 +22,17 @@ Captured straight off an Ulanzi TC001.
 | ![countdown](docs/gifs/02-countdown.gif) | **Countdown** — `3 · 2 · 1 · GO!` |
 | ![score + clock](docs/gifs/03-score-clock.gif) | **Score + clock** — score in team colors, clock ticking |
 | ![score](docs/gifs/04-score.gif) | **Score** — on its own |
-| ![clock](docs/gifs/05-clock.gif) | **Clock** — gray, **amber** under 1:00, **red** in the final 10s |
-| ![goal blue](docs/gifs/06-goal-blue.gif) | **Goal** — `GOAL!` blinks in the scorer's color (blue) |
-| ![goal orange](docs/gifs/07-goal-orange.gif) | **Goal** — …or orange |
-| ![post](docs/gifs/08-post.gif) | **Post** — you rang the crossbar |
-| ![overtime](docs/gifs/09-overtime.gif) | **Overtime** — `OVERTIME`, then `+0:0x` counting up |
-| ![your boost](docs/gifs/10-boost-you.gif) | **Your boost** — fills L→R with the % on it |
-| ![team boost](docs/gifs/11-boost-team.gif) | **Teammates' boost** — vertical bars, fill bottom→top |
-| ![final](docs/gifs/12-final.gif) | **Final** — `BLUE WINS!` and the score |
-| ![winner car](docs/gifs/13-winner-car.gif) | **Whistle** — the winner's car drives the ball away |
+| ![clock](docs/gifs/05-clock.gif) | **Clock** — plenty of time (gray) |
+| ![clock amber](docs/gifs/06-clock-amber.gif) | **Clock** — **amber** under 1:00 |
+| ![clock red](docs/gifs/07-clock-red.gif) | **Clock** — **red & blinking** in the final 10 seconds |
+| ![overtime](docs/gifs/08-overtime.gif) | **Overtime** — `OVERTIME`, then `+0:0x` counting up (gold) |
+| ![goal blue](docs/gifs/09-goal-blue.gif) | **Goal** — `GOAL!` blinks in the scorer's color (blue) |
+| ![goal orange](docs/gifs/10-goal-orange.gif) | **Goal** — …or orange |
+| ![post](docs/gifs/11-post.gif) | **Post** — you rang the crossbar |
+| ![your boost](docs/gifs/12-boost-you.gif) | **Your boost** — fills L→R with the % on it |
+| ![team boost](docs/gifs/13-boost-team.gif) | **Teammates' boost** — vertical bars, fill bottom→top |
+| ![final](docs/gifs/14-final.gif) | **Final** — `BLUE WINS!` and the score |
+| ![winner car](docs/gifs/15-winner-car.gif) | **Whistle** — the winner's car drives the ball away |
 
 ---
 
