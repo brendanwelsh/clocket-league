@@ -414,48 +414,33 @@ def run_showcase(tx, speed=1.0, loop=True):
         tx.notify(card)
         nap(secs)
 
-    roll_n = [0]
-
-    def roll():
-        """Transition: ONE car pushes the soccer ball across (alternating blue /
-        orange so both show, never two at once). Splits the clip into segments."""
-        col = BLUE if roll_n[0] % 2 == 0 else ORANGE
-        roll_n[0] += 1
-        play_car(tx, col, nap)
-
     while True:
-        # Kickoff: the cars drive by, THEN 3 · 2 · 1 · GO!
-        roll()
+        # Kickoff: your team's car drives by (the ONLY pre-game car), then 3·2·1·GO!
+        play_car(tx, BLUE, nap)
         for n in ("3", "2", "1"):
             push(sb._held(n, color=WHITE), 1.1)
         push(sb._held("GO!", color=GREEN, blink=400), 1.4)
-        roll()
         # Score + clock together
         sb.t0, sb.t1 = 2, 1
         for s in (212, 205, 198, 191, 184):
             sb.secs = s
             push(sb._live_card(), 1.3)
-        roll()
         # Score only
         push(sb._score_panel(), 5.0)
-        roll()
         # Clock only, with urgency (gray -> amber -> red)
         sb.ot = False
         for s in (95, 45, 9):
             sb.secs = s
             push(sb._time_panel(), 3.0)
-        roll()
-        # Goal — blue scores (blue pops, orange dims), then orange scores
+        # Goal — blue scores, then orange scores
         sb.t0, sb.t1, sb.flash_team = 2, 1, 0
         push(sb._goal_banner(), 2.2)
         push(sb._score_only(), 2.6)
         sb.t0, sb.t1, sb.flash_team = 2, 2, 1
         push(sb._goal_banner(), 2.2)
         push(sb._score_only(), 2.6)
-        roll()
         # Post
         push(sb._held("POST", color=GOLD, blink=300), 4.0)
-        roll()
         # Overtime
         push(sb._held("OVERTIME", center=False, color=GOLD, blink=400), 3.2)
         sb.ot = True
@@ -463,14 +448,12 @@ def run_showcase(tx, speed=1.0, loop=True):
             sb.secs = s
             push(sb._time_panel(), 1.4)
         sb.ot = False
-        roll()
         # Your boost (fills L->R with the % on it, realistic flow)
         b = 60
         for _ in range(24):
             b = step_boost(b)
             sb.players = [{"team": 0, "boost": b, "you": True}]
             push(sb._boost_self(), 0.5)
-        roll()
         # Teammates' boost (vertical bars, fill bottom->top, realistic)
         bs = [40, 80, 55]
         for _ in range(26):
@@ -478,7 +461,6 @@ def run_showcase(tx, speed=1.0, loop=True):
             sb.players = ([{"team": 0, "boost": 0, "you": True}] +
                           [{"team": 0, "boost": bs[i], "you": False} for i in range(3)])
             push(sb._boost_team(), 0.5)
-        roll()
         # Final: "BLUE" -> "WINS!" -> score -> the winner's car pushes the ball away
         sb.t0, sb.t1 = 3, 2
         win_col = BLUE if sb.t0 > sb.t1 else ORANGE
