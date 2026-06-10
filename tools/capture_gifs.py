@@ -237,6 +237,29 @@ def final_anim(stop):
          (sb._final_score(), 1.6)])(stop)
 
 
+def mvp_anim(stop):
+    sb.t0, sb.t1 = 3, 2
+    sb.players = [{"team": 0, "you": True, "name": "YOU", "score": 512}]
+    sb.mvp = sb._compute_mvp()
+    while not stop.is_set():
+        tx.notify(sb._mvp_card())
+        time.sleep(0.4)
+
+
+def greeting_anim(stop):
+    while not stop.is_set():
+        tx.notify({"text": "THIS IS ROCKET LEAGUE!", "rainbow": True, "hold": True,
+                   "stack": False, "wakeup": True, "pushIcon": 0})
+        t = time.time() + 3.0
+        while time.time() < t and not stop.is_set():
+            time.sleep(0.05)
+        tx.notify({"text": "WAITING FOR MATCH", "color": "#888888", "hold": True,
+                   "stack": False, "pushIcon": 0})
+        t = time.time() + 2.5
+        while time.time() < t and not stop.is_set():
+            time.sleep(0.05)
+
+
 # name, kind, arg, duration
 CAPTURED = [
     ("02-countdown",   seq([(sb._held("3", color=cl.WHITE), 0.8),
@@ -260,10 +283,12 @@ CAPTURED = [
 
 def main():
     print(f"capturing screens from {CLOCK} -> docs/gifs/")
+    capture("00-greeting", greeting_anim, 6.2)    # THIS IS ROCKET LEAGUE! -> waiting
     car_gif("01-kickoff-car", cl.BLUE)            # your team drives the ball in
-    for name, animate, dur in CAPTURED:
+    for name, animate, dur in CAPTURED:           # 02..14
         capture(name, animate, dur)
-    car_gif("15-winner-car", cl.ORANGE)           # winner's car drives it away
+    capture("15-mvp", mvp_anim, 3.8)              # YOU'RE MVP!
+    car_gif("16-winner-car", cl.ORANGE)           # winner's car drives it away
     print("done")
 
 

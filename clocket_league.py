@@ -45,11 +45,13 @@ POST_SECS = 1.8          # "POST" banner after a crossbar hit
 OT_NOTICE_SECS = 2.6     # "OVERTIME" banner when OT begins
 BALL_SECS = 1.3          # soccer ball shown at kickoff, before the countdown
 START_SECS = 3.6         # kickoff "3 · 2 · 1 · GO!"
-FINAL_NAME_SECS = 4.5    # "BLUE WINS!" shown first
-FINAL_SECS = 13.0        # then the score blinks, until this much has elapsed
+FINAL_NAME_SECS = 4.0    # "BLUE WINS!"
+FINAL_SCORE_SECS = 3.5   # then the score blinks
+FINAL_MVP_SECS = 4.0     # then the MVP (when there's a winner)
+FINAL_SECS = FINAL_NAME_SECS + FINAL_SCORE_SECS + FINAL_MVP_SECS   # total, for demo pacing
 IDLE_RELEASE_SECS = 30.0  # release if a live match goes silent this long
 # Features that can be turned off with --disable a,b,c
-ALL_FEATURES = {"countdown", "goal", "post", "overtime", "urgency"}
+ALL_FEATURES = {"countdown", "goal", "post", "overtime", "urgency", "greeting"}
 # Steady "screens" you can rotate through (--screens), shown --swap-secs each
 ALL_SCREENS = {"score-time", "score", "time", "boost", "boost-team"}
 
@@ -229,7 +231,8 @@ def _map_rl_envelope(obj, my_name, my_id):
         t1 = next((t for t in teams if t.get("TeamNum") == 1), {}) or {}
         players = [
             {"team": p.get("TeamNum", 0), "boost": boost_pct(p.get("Boost")),
-             "you": _is_you(p.get("Name"), p.get("PrimaryId"), my_name, my_id)}
+             "you": _is_you(p.get("Name"), p.get("PrimaryId"), my_name, my_id),
+             "name": p.get("Name", ""), "score": int(p.get("Score", 0) or 0)}
             for p in (raw.get("Players") or [])
         ]
         return {"type": "tick", "t0": int(t0.get("Score", 0) or 0),
@@ -318,7 +321,8 @@ def ballshark_source(ws_url, my_name, my_id, poll=1.0):
                 elif t == "tick":
                     players = [
                         {"team": p.get("team_num", 0), "boost": boost_pct(p.get("boost")),
-                         "you": _is_you(p.get("name"), p.get("primary_id"), my_name, my_id)}
+                         "you": _is_you(p.get("name"), p.get("primary_id"), my_name, my_id),
+                         "name": p.get("name", ""), "score": int(p.get("score", 0) or 0)}
                         for p in (d.get("players") or [])
                     ]
                     yield {"type": "tick", "t0": int(d.get("team0_score", 0) or 0),
@@ -363,9 +367,11 @@ def demo_source(speed=1.0, once=False):
     def players(sec):
         for i in range(8):
             boosts[i] = step_boost(boosts[i])            # drain/refill like a real game
-        ps = [{"team": 0, "boost": boosts[0], "you": True}]
-        ps += [{"team": 0, "boost": boosts[i], "you": False} for i in (1, 2, 3)]
-        ps += [{"team": 1, "boost": boosts[i], "you": False} for i in (4, 5, 6, 7)]
+        ps = [{"team": 0, "boost": boosts[0], "you": True, "name": "YOU", "score": 512}]
+        ps += [{"team": 0, "boost": boosts[i], "you": False,
+                "name": f"MATE{i}", "score": 300 - i * 40} for i in (1, 2, 3)]
+        ps += [{"team": 1, "boost": boosts[i], "you": False,
+                "name": f"OPP{i}", "score": 240} for i in (4, 5, 6, 7)]
         return ps
 
     def tick(t0, t1, secs, ot=False):
@@ -461,12 +467,16 @@ def run_showcase(tx, speed=1.0, loop=True):
             sb.players = ([{"team": 0, "boost": 0, "you": True}] +
                           [{"team": 0, "boost": bs[i], "you": False} for i in range(3)])
             push(sb._boost_team(), 0.5)
-        # Final: "BLUE" -> "WINS!" -> score -> the winner's car pushes the ball away
+        # Final: "BLUE" -> "WINS!" -> score -> MVP -> the winner's car drives the ball away
         sb.t0, sb.t1 = 3, 2
         win_col = BLUE if sb.t0 > sb.t1 else ORANGE
+        sb.players = [{"team": 0, "boost": 0, "you": True, "name": "YOU", "score": 512},
+                      {"team": 0, "boost": 0, "you": False, "name": "MATE", "score": 280}]
+        sb.mvp = sb._compute_mvp()
         push(sb._held(sb._team_label(0 if sb.t0 > sb.t1 else 1), color=win_col), 2.0)
         push(sb._held("WINS!", color=win_col, blink=350), 2.2)
         push(sb._final_score(), 2.6)
+        push(sb._mvp_card(), 2.8)
         play_car(tx, win_col, nap)                  # the winner's car drives the ball away
         if not loop:
             return
@@ -500,7 +510,9 @@ class Scoreboard:
         self.ot_until = 0.0
         self.start_until = 0.0    # end of the 3-2-1 countdown
         self.final_name_until = 0.0
+        self.final_score_until = 0.0
         self.final_until = 0.0
+        self.mvp = None           # winning team's top scorer, for the MVP callout
 
     def on(self, feature: str) -> bool:
         return feature not in self.disabled
@@ -569,6 +581,23 @@ class Scoreboard:
         c1 = ORANGE if self.t1 >= self.t0 else WHITE
         return self._held([{"t": str(self.t0), "c": c0}, {"t": "-", "c": WHITE},
                            {"t": str(self.t1), "c": c1}], blink=450)
+
+    def _compute_mvp(self):
+        """MVP = the top-scoring player on the winning team (None on a tie)."""
+        if self.t0 == self.t1:
+            return None
+        wteam = 0 if self.t0 > self.t1 else 1
+        winners = [p for p in self.players if p.get("team") == wteam]
+        return max(winners, key=lambda p: p.get("score", 0)) if winners else None
+
+    def _mvp_card(self):
+        """Third beat: the MVP, in gold (or 'YOU'RE MVP!' if it's you)."""
+        if not self.mvp:
+            return None
+        if self.mvp.get("you"):
+            return self._held("YOU'RE MVP!", center=False, color=GOLD, blink=350)
+        name = (self.mvp.get("name") or "MVP").lstrip("@")[:14]
+        return self._held("MVP  " + name, center=False, color=GOLD)
 
     def _ball_card(self):
         """Soccer ball at kickoff: white ball with one clean black center pentagon."""
@@ -683,7 +712,7 @@ class Scoreboard:
     def _reset_windows(self):
         self.ball_until = self.goal_until = self.flash_until = self.post_until = 0.0
         self.ot_until = self.start_until = 0.0
-        self.final_name_until = self.final_until = 0.0
+        self.final_name_until = self.final_score_until = self.final_until = 0.0
 
     def on_start(self, now):
         self.active = True
@@ -741,11 +770,14 @@ class Scoreboard:
     def on_end(self, now):
         if not self.active and self.final_until:
             return
-        log(f"FINAL {self.t0}-{self.t1}")
+        self.mvp = self._compute_mvp()
+        log(f"FINAL {self.t0}-{self.t1}" +
+            (f" | MVP {self.mvp.get('name')}" if self.mvp else ""))
         self.active = False
         self._reset_windows()
-        self.final_name_until = now + FINAL_NAME_SECS   # "BLUE WINS!" first
-        self.final_until = now + FINAL_SECS             # then score blinks
+        self.final_name_until = now + FINAL_NAME_SECS                 # "BLUE WINS!"
+        self.final_score_until = self.final_name_until + FINAL_SCORE_SECS  # score
+        self.final_until = self.final_score_until + (FINAL_MVP_SECS if self.mvp else 0)
         self._publish(self._final_name(), now, force=True)
 
     def on_idle(self, now):
@@ -758,10 +790,12 @@ class Scoreboard:
                 self.final_until = 0.0
                 self.last_payload = None
                 log("released")
+            elif now >= self.final_score_until and self.mvp:
+                self._publish(self._mvp_card(), now)       # third beat: MVP
             elif now >= self.final_name_until:
-                self._publish(self._final_score(), now)   # second beat: score blink
+                self._publish(self._final_score(), now)    # second beat: score
             else:
-                self._publish(self._final_name(), now)
+                self._publish(self._final_name(), now)     # first beat: WINS!
             return
         if self.active:
             if now - self.last_data > IDLE_RELEASE_SECS:
@@ -897,6 +931,16 @@ def main():
             board.release("shutdown")
             log("bye")
         return
+
+    if a.source in ("rl", "ballshark") and "greeting" not in disabled:
+        log("greeting")
+        tx.notify({"text": "THIS IS ROCKET LEAGUE!", "rainbow": True, "hold": True,
+                   "stack": False, "wakeup": True, "pushIcon": 0})
+        time.sleep(3.4)
+        tx.notify({"text": "WAITING FOR MATCH", "color": "#888888", "hold": True,
+                   "stack": False, "pushIcon": 0})
+        time.sleep(2.6)
+        tx.dismiss()
 
     log("running — play Rocket League. Ctrl-C to stop.")
     src = make_source(a)

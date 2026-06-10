@@ -48,6 +48,7 @@ Captured straight off an Ulanzi TC001.
 
 | | |
 |---|---|
+| ![greeting](docs/gifs/00-greeting.gif) | **Launch** — `THIS IS ROCKET LEAGUE!` 🌈 → `WAITING FOR MATCH` |
 | ![kickoff](docs/gifs/01-kickoff-car.gif) | **Kickoff** — your team's car drives the ball in (the only car before the game) |
 | ![countdown](docs/gifs/02-countdown.gif) | **Countdown** — `3 · 2 · 1 · GO!` |
 | ![score + clock](docs/gifs/03-score-clock.gif) | **Score + clock** — score in team colors, clock ticking |
@@ -62,7 +63,8 @@ Captured straight off an Ulanzi TC001.
 | ![your boost](docs/gifs/12-boost-you.gif) | **Your boost** — fills L→R with the % on it |
 | ![team boost](docs/gifs/13-boost-team.gif) | **Teammates' boost** — vertical bars, fill bottom→top |
 | ![final](docs/gifs/14-final.gif) | **Final** — `BLUE WINS!` and the score |
-| ![winner car](docs/gifs/15-winner-car.gif) | **Whistle** — the winner's car drives the ball away |
+| ![mvp](docs/gifs/15-mvp.gif) | **MVP** — `YOU'RE MVP!` (or `MVP <name>` for the winning team's top scorer) |
+| ![winner car](docs/gifs/16-winner-car.gif) | **Whistle** — the winner's car drives the ball away |
 
 ---
 
@@ -107,7 +109,7 @@ Every flag is also an env var / `.env` key (see [`.env.example`](.env.example)).
 | `--transport` | `http` (straight to the clock) · `mqtt` (via a broker) | `http` |
 | `--screens` | what the steady display shows — a comma list it rotates through (see below) | `score-time` |
 | `--swap-secs` | seconds per screen when `--screens` lists more than one | `10` |
-| `--disable` | turn features off: `countdown,goal,post,overtime,urgency` | none |
+| `--disable` | turn features off: `greeting,countdown,goal,post,overtime,urgency` | none |
 | `--team-names` | `normalize` (BLUE/ORANGE WINS) · `actual` (real lobby name) | `normalize` |
 | `--player-name` | your in-game name — needed for the boost screens | — |
 
@@ -131,9 +133,9 @@ It rotates through whatever you list, `--swap-secs` apart:
 
 ### `--disable` — turn off what you don't want
 
-`countdown` (the kickoff 3-2-1) · `goal` (the GOAL! banner) · `post` (crossbar) ·
-`overtime` (the OT banner) · `urgency` (the amber/red clock). e.g.
-`--disable post,urgency`.
+`greeting` (the "THIS IS ROCKET LEAGUE!" launch screen) · `countdown` (the kickoff
+3-2-1) · `goal` (the GOAL! banner) · `post` (crossbar) · `overtime` (the OT banner)
+· `urgency` (the amber/red clock). e.g. `--disable post,urgency`.
 
 ### Sources & transports
 
