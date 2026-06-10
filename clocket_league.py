@@ -45,8 +45,8 @@ GOAL_BANNER_SECS = 1.8   # blinking "GOAL!" in the scorer's color
 FLASH_SECS = 1.8         # then the score alone (both teams lit) before steady
 POST_SECS = 1.8          # "POST" banner after a crossbar hit
 OT_NOTICE_SECS = 2.6     # "OVERTIME" banner when OT begins
-SAVE_SECS = 2.6          # "WHAT A SAVE!" banner
-DEMO_SECS = 2.4          # "DEMOLISHED" banner
+SAVE_SECS = 5.0          # "WHAT A SAVE!" banner (long enough to scroll fully)
+DEMO_SECS = 2.4          # "DEMO" banner
 BOOM_SECS = 1.4          # hat trick: "BOOM!" ...
 HAT_SECS = 2.6           # ... then the hat + "TRICK"
 SCORER_SECS = 1.5        # the goal scorer's name after the GOAL! banner
@@ -524,16 +524,23 @@ class Scoreboard:
     def _scorer_card(self):
         name = (self.scorer_name or "").lstrip("@")[:14]
         col = BLUE if self.flash_team == 0 else ORANGE
-        return self._held(name, center=False, color=col)
+        return self._held(name, color=col)                 # centered (scrolls if long)
 
     def _save_card(self):
         return self._held("WHAT A SAVE!", center=False, color=CYAN, blink=350)
 
     def _demo_card(self):
-        return self._held("DEMOLISHED", center=False, color=RED, blink=350)
+        return self._held("DEMO", color=RED, blink=300)    # short + centered
 
     def _boom_card(self):
-        return self._held("BOOM!", color=GOLD, blink=300)
+        """A lit bomb — the hat-trick opener (it's the bomb)."""
+        draw = [
+            {"dfc": [14, 5, 3, "#3A3A3A"]},                # bomb body
+            {"dp": [12, 4, "#8A8A8A"]},                    # shine
+            {"dp": [15, 2, "#9B6B3A"]}, {"dp": [16, 1, "#9B6B3A"]},   # fuse
+            {"dp": [17, 0, "#FFD000"]}, {"dp": [16, 0, "#FF6600"]},   # spark
+        ]
+        return self._held(None, draw=draw)
 
     def _hat_card(self):
         """A little top hat, then 'TRICK' — the hat stands in for 'HAT'."""
@@ -707,8 +714,8 @@ class Scoreboard:
 
     def _publish(self, payload, now, force=False):
         key = json.dumps(payload, sort_keys=True)
-        if not force and key == self.last_payload and (now - self.last_pub) < CLOCK_REFRESH:
-            return
+        if not force and key == self.last_payload:
+            return            # same card already up — don't re-push (it restarts scroll)
         self.tx.notify(payload)
         self.last_payload, self.last_pub = key, now
 

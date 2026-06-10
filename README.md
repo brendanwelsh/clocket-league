@@ -48,23 +48,27 @@ Captured straight off an Ulanzi TC001.
 
 | | |
 |---|---|
-| ![greeting](docs/gifs/00-greeting.gif) | **Launch** — `THIS IS ROCKET LEAGUE!` 🌈 → `WAITING FOR MATCH` |
-| ![kickoff](docs/gifs/01-kickoff-car.gif) | **Kickoff** — your team's car drives the ball in |
-| ![countdown](docs/gifs/02-countdown.gif) | **Countdown** — `3 · 2 · 1 · GO!` |
-| ![score + clock](docs/gifs/03-score-clock.gif) | **Score + clock** — score in team colors, clock ticking |
-| ![score](docs/gifs/04-score.gif) | **Score** — on its own |
-| ![clock](docs/gifs/05-clock.gif) | **Clock** — plenty of time (gray) |
-| ![clock amber](docs/gifs/06-clock-amber.gif) | **Clock** — **amber** under 1:00 |
-| ![clock red](docs/gifs/07-clock-red.gif) | **Clock** — **red & blinking** in the final 10 seconds |
-| ![overtime](docs/gifs/08-overtime.gif) | **Overtime** — `OVERTIME`, then `+0:0x` counting up (gold) |
-| ![goal blue](docs/gifs/09-goal-blue.gif) | **Goal** — `GOAL!` blinks in the scorer's color (blue) |
+| ![greeting](docs/gifs/00-greeting.gif) | **Launch** — a rainbow `THIS IS ROCKET LEAGUE!` |
+| ![waiting](docs/gifs/01-waiting.gif) | **Idle** — `WAITING FOR MATCH` until you're in one |
+| ![kickoff](docs/gifs/02-kickoff-car.gif) | **Kickoff** — your team's car drives the ball in |
+| ![countdown](docs/gifs/03-countdown.gif) | **Countdown** — `3 · 2 · 1 · GO!` |
+| ![score + clock](docs/gifs/04-score-clock.gif) | **Score + clock** — score in team colors, clock ticking |
+| ![score](docs/gifs/05-score.gif) | **Score** — on its own |
+| ![clock](docs/gifs/06-clock.gif) | **Clock** — plenty of time (gray) |
+| ![clock amber](docs/gifs/07-clock-amber.gif) | **Clock** — **amber** under 1:00 |
+| ![clock red](docs/gifs/08-clock-red.gif) | **Clock** — **red & blinking** in the final 10 seconds |
+| ![goal blue](docs/gifs/09-goal-blue.gif) | **Goal** — `GOAL!` in the scorer's color, then the scorer's name |
 | ![goal orange](docs/gifs/10-goal-orange.gif) | **Goal** — …or orange |
 | ![post](docs/gifs/11-post.gif) | **Post** — you rang the crossbar |
-| ![your boost](docs/gifs/12-boost-you.gif) | **Your boost** — fills L→R with the % on it |
-| ![team boost](docs/gifs/13-boost-team.gif) | **Teammates' boost** — vertical bars, fill bottom→top |
-| ![final](docs/gifs/14-final.gif) | **Final** — `BLUE WINS!` and the score |
-| ![mvp](docs/gifs/15-mvp.gif) | **MVP** — `YOU'RE MVP!` (or `MVP <name>` for the winning team's top scorer) |
-| ![winner car](docs/gifs/16-winner-car.gif) | **Whistle** — the winner's car drives the ball away |
+| ![save](docs/gifs/12-save.gif) | **Save** — `WHAT A SAVE!` |
+| ![demo](docs/gifs/13-demo.gif) | **Demo** — `DEMO` when you wreck someone |
+| ![hat trick](docs/gifs/14-hat-trick.gif) | **Hat trick** — a bomb 💣 then a top-hat + `TRICK` |
+| ![overtime](docs/gifs/15-overtime.gif) | **Overtime** — `OVERTIME`, then `+0:0x` counting up (gold) |
+| ![your boost](docs/gifs/16-boost-you.gif) | **Your boost** — fills L→R with the % on it |
+| ![team boost](docs/gifs/17-boost-team.gif) | **Teammates' boost** — vertical bars, fill bottom→top |
+| ![final](docs/gifs/18-final.gif) | **Final** — `BLUE WINS!` and the score |
+| ![mvp](docs/gifs/19-mvp.gif) | **MVP** — `YOU'RE MVP!` (or `MVP <name>` for the winning team's top scorer) |
+| ![winner car](docs/gifs/20-winner-car.gif) | **Whistle** — the winner's car drives the ball away |
 
 ---
 

@@ -152,9 +152,9 @@ def seq(steps):
 
 def hold_anim(make):
     def fn(stop):
+        tx.notify(make())                # publish ONCE so scrolling completes
         while not stop.is_set():
-            tx.notify(make())
-            time.sleep(0.4)
+            time.sleep(0.1)
     return fn
 
 
@@ -184,7 +184,9 @@ def score_clock_anim(stop):
 def goal_anim(team):
     def fn(stop):
         sb.t0, sb.t1, sb.flash_team = (2, 1, 0) if team == 0 else (2, 2, 1)
-        seq([(sb._goal_banner(), 1.2), (sb._score_only(), 2.0)])(stop)
+        sb.scorer_name = "NEO" if team == 0 else "ACE"
+        seq([(sb._goal_banner(), 1.2), (sb._scorer_card(), 1.8),
+             (sb._score_only(), 1.8)])(stop)            # GOAL! -> scorer -> score
     return fn
 
 
@@ -241,54 +243,58 @@ def mvp_anim(stop):
     sb.t0, sb.t1 = 3, 2
     sb.players = [{"team": 0, "you": True, "name": "YOU", "score": 512}]
     sb.mvp = sb._compute_mvp()
+    tx.notify(sb._mvp_card())             # publish once so it scrolls fully
     while not stop.is_set():
-        tx.notify(sb._mvp_card())
-        time.sleep(0.4)
+        time.sleep(0.1)
 
 
 def greeting_anim(stop):
     while not stop.is_set():
         tx.notify({"text": "THIS IS ROCKET LEAGUE!", "rainbow": True, "hold": True,
                    "stack": False, "wakeup": True, "pushIcon": 0})
-        t = time.time() + 3.0
-        while time.time() < t and not stop.is_set():
-            time.sleep(0.05)
-        tx.notify({"text": "WAITING FOR MATCH", "color": "#888888", "hold": True,
-                   "stack": False, "pushIcon": 0})
-        t = time.time() + 2.5
+        t = time.time() + 6.0                        # let the whole line scroll
         while time.time() < t and not stop.is_set():
             time.sleep(0.05)
 
 
-# name, kind, arg, duration
+def hattrick_anim(stop):
+    seq([(sb._boom_card(), 1.4), (sb._hat_card(), 2.6)])(stop)  # BOOM! -> hat + TRICK
+
+
+# name, animator, duration. Each is a separate, equal-ish GIF.
 CAPTURED = [
-    ("02-countdown",   seq([(sb._held("3", color=cl.WHITE), 0.8),
+    ("01-waiting",     hold_anim(lambda: sb._held("WAITING FOR MATCH", center=False,
+                                                  color="#888888")), 5.5),
+    ("03-countdown",   seq([(sb._held("3", color=cl.WHITE), 0.8),
                             (sb._held("2", color=cl.WHITE), 0.8),
                             (sb._held("1", color=cl.WHITE), 0.8),
                             (sb._held("GO!", color=cl.GREEN, blink=350), 1.2)]), 4.2),
-    ("03-score-clock", score_clock_anim, 4.5),
-    ("04-score",       score_panel_anim, 2.8),
-    ("05-clock",       clock_at([188, 186, 184, 182], 0.9), 3.6),
-    ("06-clock-amber", clock_at([48, 46, 44, 42], 0.9), 3.6),
-    ("07-clock-red",   clock_at([9, 8, 7, 6, 5, 4, 3, 2, 1, 0], 0.45), 4.6),
-    ("08-overtime",    overtime_anim, 5.6),
-    ("09-goal-blue",   goal_anim(0), 4.4),
-    ("10-goal-orange", goal_anim(1), 4.4),
+    ("04-score-clock", score_clock_anim, 4.5),
+    ("05-score",       score_panel_anim, 2.8),
+    ("06-clock",       clock_at([188, 186, 184, 182], 0.9), 3.6),
+    ("07-clock-amber", clock_at([48, 46, 44, 42], 0.9), 3.6),
+    ("08-clock-red",   clock_at([9, 8, 7, 6, 5, 4, 3, 2, 1, 0], 0.45), 4.6),
+    ("09-goal-blue",   goal_anim(0), 5.4),
+    ("10-goal-orange", goal_anim(1), 5.4),
     ("11-post",        hold_anim(lambda: sb._held("POST", color=cl.GOLD, blink=300)), 3.6),
-    ("12-boost-you",   boost_self_anim, 5.2),
-    ("13-boost-team",  boost_team_anim, 5.2),
-    ("14-final",       final_anim, 4.6),
+    ("12-save",        hold_anim(sb._save_card), 6.5),    # WHAT A SAVE! (full scroll)
+    ("13-demo",        hold_anim(sb._demo_card), 3.6),    # DEMO
+    ("14-hat-trick",   hattrick_anim, 5.0),               # bomb -> hat + TRICK
+    ("15-overtime",    overtime_anim, 5.6),
+    ("16-boost-you",   boost_self_anim, 5.2),
+    ("17-boost-team",  boost_team_anim, 5.2),
+    ("18-final",       final_anim, 4.6),
 ]
 
 
 def main():
     print(f"capturing screens from {CLOCK} -> docs/gifs/")
-    capture("00-greeting", greeting_anim, 6.2)    # THIS IS ROCKET LEAGUE! -> waiting
-    car_gif("01-kickoff-car", cl.BLUE)            # your team drives the ball in
-    for name, animate, dur in CAPTURED:           # 02..14
+    capture("00-greeting", greeting_anim, 6.5)    # THIS IS ROCKET LEAGUE!
+    car_gif("02-kickoff-car", cl.BLUE)            # your team drives the ball in
+    for name, animate, dur in CAPTURED:
         capture(name, animate, dur)
-    capture("15-mvp", mvp_anim, 3.8)              # YOU'RE MVP!
-    car_gif("16-winner-car", cl.ORANGE)           # winner's car drives it away
+    capture("19-mvp", mvp_anim, 5.5)              # YOU'RE MVP! (full scroll)
+    car_gif("20-winner-car", cl.ORANGE)           # winner's car drives it away
     print("done")
 
 
