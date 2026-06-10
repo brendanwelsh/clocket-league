@@ -49,7 +49,7 @@ Captured straight off an Ulanzi TC001.
 | | |
 |---|---|
 | ![greeting](docs/gifs/00-greeting.gif) | **Launch** — `THIS IS ROCKET LEAGUE!` 🌈 → `WAITING FOR MATCH` |
-| ![kickoff](docs/gifs/01-kickoff-car.gif) | **Kickoff** — your team's car drives the ball in (the only car before the game) |
+| ![kickoff](docs/gifs/01-kickoff-car.gif) | **Kickoff** — your team's car drives the ball in |
 | ![countdown](docs/gifs/02-countdown.gif) | **Countdown** — `3 · 2 · 1 · GO!` |
 | ![score + clock](docs/gifs/03-score-clock.gif) | **Score + clock** — score in team colors, clock ticking |
 | ![score](docs/gifs/04-score.gif) | **Score** — on its own |
@@ -105,7 +105,7 @@ Every flag is also an env var / `.env` key (see [`.env.example`](.env.example)).
 | Flag | What it does | Default |
 |---|---|---|
 | `--clock-host IP` | your AWTRIX clock (for `--transport http`) | — |
-| `--source` | `rl` (RL's socket) · `ballshark` (tracker WS) · `demo` · `showcase` | `rl` |
+| `--source` | `rl` (RL's Stats API socket) · `demo` · `showcase` | `rl` |
 | `--transport` | `http` (straight to the clock) · `mqtt` (via a broker) | `http` |
 | `--screens` | what the steady display shows — a comma list it rotates through (see below) | `score-time` |
 | `--swap-secs` | seconds per screen when `--screens` lists more than one | `10` |
@@ -137,11 +137,9 @@ It rotates through whatever you list, `--swap-secs` apart:
 3-2-1) · `goal` (the GOAL! banner) · `post` (crossbar) · `overtime` (the OT banner)
 · `urgency` (the amber/red clock). e.g. `--disable post,urgency`.
 
-### Sources & transports
+### Transports
 
-- **`--source rl`** reads RL's local Stats API socket — nothing else needed.
-- **`--source ballshark`** reads a running [ballshark](https://github.com/brendanwelsh/ballshark)
-  tracker (so two programs don't fight over RL's socket). Needs `pip install websocket-client`.
+- **`--transport http`** (default) posts straight to the clock — nothing else needed.
 - **`--transport mqtt`** publishes to a broker the clock listens on. Needs `pip install paho-mqtt`.
 
 **Keep it running:** [`run.bat`](run.bat) (Windows) or

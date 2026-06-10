@@ -33,6 +33,8 @@ AMBER = "#FFB300"       # clock under a minute
 RED = "#FF2A2A"         # clock in the final seconds
 GREEN = "#22DD66"       # GO!
 GOLD = "#FFD000"        # POST / overtime
+CYAN = "#19D3DA"        # WHAT A SAVE!
+PURPLE = "#8A3FD1"      # hat trick hat
 TRACK = "#101822"       # empty boost track
 
 # ---------------------------------------------------------------------------
@@ -43,11 +45,16 @@ GOAL_BANNER_SECS = 1.8   # blinking "GOAL!" in the scorer's color
 FLASH_SECS = 1.8         # then the score alone (both teams lit) before steady
 POST_SECS = 1.8          # "POST" banner after a crossbar hit
 OT_NOTICE_SECS = 2.6     # "OVERTIME" banner when OT begins
+SAVE_SECS = 2.6          # "WHAT A SAVE!" banner
+DEMO_SECS = 2.4          # "DEMOLISHED" banner
+BOOM_SECS = 1.4          # hat trick: "BOOM!" ...
+HAT_SECS = 2.6           # ... then the hat + "TRICK"
+SCORER_SECS = 1.5        # the goal scorer's name after the GOAL! banner
 BALL_SECS = 1.3          # soccer ball shown at kickoff, before the countdown
 START_SECS = 3.6         # kickoff "3 · 2 · 1 · GO!"
 FINAL_NAME_SECS = 4.0    # "BLUE WINS!"
 FINAL_SCORE_SECS = 3.5   # then the score blinks
-FINAL_MVP_SECS = 4.0     # then the MVP (when there's a winner)
+FINAL_MVP_SECS = 6.0     # then the MVP (long enough for the name to scroll fully)
 FINAL_SECS = FINAL_NAME_SECS + FINAL_SCORE_SECS + FINAL_MVP_SECS   # total, for demo pacing
 IDLE_RELEASE_SECS = 30.0  # release if a live match goes silent this long
 # Features that can be turned off with --disable a,b,c
@@ -232,7 +239,8 @@ def _map_rl_envelope(obj, my_name, my_id):
         players = [
             {"team": p.get("TeamNum", 0), "boost": boost_pct(p.get("Boost")),
              "you": _is_you(p.get("Name"), p.get("PrimaryId"), my_name, my_id),
-             "name": p.get("Name", ""), "score": int(p.get("Score", 0) or 0)}
+             "name": p.get("Name", ""), "score": int(p.get("Score", 0) or 0),
+             "goals": int(p.get("Goals", 0) or 0)}
             for p in (raw.get("Players") or [])
         ]
         return {"type": "tick", "t0": int(t0.get("Score", 0) or 0),
@@ -244,6 +252,14 @@ def _map_rl_envelope(obj, my_name, my_id):
         return {"type": "goal"}
     if event == "CrossbarHit":
         return {"type": "crossbar"}
+    if event == "StatfeedEvent":
+        t = (raw.get("Type") or "").lower()
+        nm = (raw.get("MainTarget") or {}).get("Name", "")
+        you = _is_you(nm, None, my_name, my_id)
+        if "save" in t:
+            return {"type": "save", "you": you, "name": nm}
+        if "demo" in t:                                   # Demolish / Demolition
+            return {"type": "demo", "you": you, "name": nm}
     if event in ("MatchEnded", "MatchDestroyed"):
         return {"type": "end"}
     return None
@@ -293,65 +309,6 @@ def rl_source(host, port, my_name, my_id, poll=1.0):
             yield None
 
 
-def ballshark_source(ws_url, my_name, my_id, poll=1.0):
-    import websocket  # only for --source ballshark (websocket-client)
-    while True:
-        ws = None
-        try:
-            log(f"connecting to ballshark at {ws_url} ...")
-            ws = websocket.create_connection(ws_url, timeout=6)
-            ws.settimeout(poll)
-            yield {"type": "_connected"}
-            connected_at = time.monotonic()
-            while True:
-                try:
-                    raw = ws.recv()
-                except websocket.WebSocketTimeoutException:
-                    yield None
-                    continue
-                if not raw:
-                    break
-                try:
-                    m = json.loads(raw)
-                except ValueError:
-                    continue
-                t, d = m.get("type"), (m.get("data") or {})
-                if t == "match_start":
-                    yield {"type": "start"}
-                elif t == "tick":
-                    players = [
-                        {"team": p.get("team_num", 0), "boost": boost_pct(p.get("boost")),
-                         "you": _is_you(p.get("name"), p.get("primary_id"), my_name, my_id),
-                         "name": p.get("name", ""), "score": int(p.get("score", 0) or 0)}
-                        for p in (d.get("players") or [])
-                    ]
-                    yield {"type": "tick", "t0": int(d.get("team0_score", 0) or 0),
-                           "t1": int(d.get("team1_score", 0) or 0),
-                           "t0name": d.get("team0_name") or "",
-                           "t1name": d.get("team1_name") or "",
-                           "secs": int(d.get("time_seconds", 0) or 0),
-                           "ot": bool(d.get("is_overtime", False)), "players": players}
-                elif t == "goal":
-                    yield {"type": "goal"}
-                elif t == "crossbar":
-                    yield {"type": "crossbar"}
-                elif t == "match_end":
-                    if time.monotonic() - connected_at > 3.0:  # skip replayed end
-                        yield {"type": "end"}
-        except Exception as e:  # noqa: BLE001
-            log(f"ballshark link down ({type(e).__name__}); retrying...")
-        finally:
-            try:
-                if ws:
-                    ws.close()
-            except Exception:
-                pass
-        yield {"type": "_disconnected"}
-        for _ in range(max(1, int(2 / poll))):
-            time.sleep(poll)
-            yield None
-
-
 def demo_source(speed=1.0, once=False):
     """A tight, scripted highlight match — no Rocket League needed. Rips through
     every scene once: kickoff, goals (both teams), a crossbar, a late equalizer,
@@ -367,11 +324,12 @@ def demo_source(speed=1.0, once=False):
     def players(sec):
         for i in range(8):
             boosts[i] = step_boost(boosts[i])            # drain/refill like a real game
-        ps = [{"team": 0, "boost": boosts[0], "you": True, "name": "YOU", "score": 512}]
+        ps = [{"team": 0, "boost": boosts[0], "you": True, "name": "YOU",
+               "score": 512, "goals": 0}]
         ps += [{"team": 0, "boost": boosts[i], "you": False,
-                "name": f"MATE{i}", "score": 300 - i * 40} for i in (1, 2, 3)]
+                "name": f"MATE{i}", "score": 300 - i * 40, "goals": 0} for i in (1, 2, 3)]
         ps += [{"team": 1, "boost": boosts[i], "you": False,
-                "name": f"OPP{i}", "score": 240} for i in (4, 5, 6, 7)]
+                "name": f"OPP{i}", "score": 240, "goals": 0} for i in (4, 5, 6, 7)]
         return ps
 
     def tick(t0, t1, secs, ot=False):
@@ -494,6 +452,7 @@ class Scoreboard:
         self.swap_secs = max(2.0, swap_secs)
         self.team_names = team_names   # "normalize" -> BLUE/ORANGE, "actual" -> real
         self.active = False
+        self.waiting = False      # show "WAITING FOR MATCH" while idle
         self.t0 = self.t1 = 0
         self.t0name = self.t1name = ""
         self.secs = 0
@@ -505,7 +464,15 @@ class Scoreboard:
         self.last_data = 0.0
         self.ball_until = 0.0     # soccer ball at kickoff
         self.goal_until = 0.0     # "GOAL!" banner
+        self.scorer_until = 0.0   # scorer's name after a goal
+        self.scorer_name = ""
         self.flash_until = 0.0    # score-only emphasis
+        self.save_until = 0.0     # "WHAT A SAVE!"
+        self.demo_until = 0.0     # "DEMOLISHED"
+        self.ht_boom_until = 0.0  # hat trick "BOOM!"
+        self.ht_until = 0.0       # hat trick hat + "TRICK"
+        self.goals_by = {}        # name -> goals, to spot the scorer + hat tricks
+        self.ht_done = set()      # players we've already hat-trick'd this match
         self.post_until = 0.0
         self.ot_until = 0.0
         self.start_until = 0.0    # end of the 3-2-1 countdown
@@ -553,6 +520,30 @@ class Scoreboard:
     def _goal_banner(self):
         col = BLUE if self.flash_team == 0 else ORANGE
         return self._held("GOAL!", color=col, blink=350)
+
+    def _scorer_card(self):
+        name = (self.scorer_name or "").lstrip("@")[:14]
+        col = BLUE if self.flash_team == 0 else ORANGE
+        return self._held(name, center=False, color=col)
+
+    def _save_card(self):
+        return self._held("WHAT A SAVE!", center=False, color=CYAN, blink=350)
+
+    def _demo_card(self):
+        return self._held("DEMOLISHED", center=False, color=RED, blink=350)
+
+    def _boom_card(self):
+        return self._held("BOOM!", color=GOLD, blink=300)
+
+    def _hat_card(self):
+        """A little top hat, then 'TRICK' — the hat stands in for 'HAT'."""
+        draw = [
+            {"df": [0, 6, 8, 1, WHITE]},        # brim
+            {"df": [1, 1, 6, 5, PURPLE]},       # body
+            {"df": [1, 4, 6, 1, GOLD]},         # band
+            {"dt": [10, 1, "TRICK", WHITE]},    # text
+        ]
+        return self._held(None, draw=draw)
 
     def _score_only(self):
         # Pure RL blue/orange, blinking. Who scored is shown by the GOAL! banner.
@@ -689,8 +680,18 @@ class Scoreboard:
             return self._ball_card()
         if self.on("countdown") and now < self.start_until:
             return self._countdown(now)
+        if now < self.ht_boom_until:
+            return self._boom_card()                       # hat trick: BOOM!
+        if now < self.ht_until:
+            return self._hat_card()                        # ...then hat + TRICK
+        if now < self.save_until:
+            return self._save_card()
+        if now < self.demo_until:
+            return self._demo_card()
         if self.on("goal") and now < self.goal_until:
             return self._goal_banner()
+        if now < self.scorer_until and self.scorer_name:
+            return self._scorer_card()
         if now < self.flash_until:
             return self._score_only()
         if self.on("post") and now < self.post_until:
@@ -701,6 +702,9 @@ class Scoreboard:
         screens = self._active_screens()
         return self._screen_card(screens[int(now / self.swap_secs) % len(screens)])
 
+    def _waiting_card(self):
+        return self._held("WAITING FOR MATCH", center=False, color="#888888")
+
     def _publish(self, payload, now, force=False):
         key = json.dumps(payload, sort_keys=True)
         if not force and key == self.last_payload and (now - self.last_pub) < CLOCK_REFRESH:
@@ -710,16 +714,29 @@ class Scoreboard:
 
     # -- event handlers ----------------------------------------------------
     def _reset_windows(self):
-        self.ball_until = self.goal_until = self.flash_until = self.post_until = 0.0
-        self.ot_until = self.start_until = 0.0
+        self.ball_until = self.goal_until = self.scorer_until = 0.0
+        self.flash_until = self.post_until = self.ot_until = self.start_until = 0.0
+        self.save_until = self.demo_until = self.ht_boom_until = self.ht_until = 0.0
         self.final_name_until = self.final_score_until = self.final_until = 0.0
+
+    def go_waiting(self, now):
+        """Idle state: hold 'WAITING FOR MATCH' until a match starts."""
+        self.active = False
+        self.t0 = self.t1 = 0
+        self.waiting = True
+        self._reset_windows()
+        self._publish(self._waiting_card(), now, force=True)
 
     def on_start(self, now):
         self.active = True
+        self.waiting = False
         self.t0 = self.t1 = 0
         self.secs = 0
         self.ot = False
         self.flash_team = None
+        self.scorer_name = ""
+        self.goals_by = {}
+        self.ht_done = set()
         self._reset_windows()
         self.last_data = now
         log("match starting")
@@ -731,6 +748,7 @@ class Scoreboard:
 
     def on_tick(self, ev, now):
         self.active = True
+        self.waiting = False
         self.final_until = 0.0
         self.last_data = now
         self.players = ev.get("players") or self.players
@@ -738,6 +756,19 @@ class Scoreboard:
             self.t0name = ev["t0name"]
         if ev.get("t1name"):
             self.t1name = ev["t1name"]
+        # who scored (a player whose goal count went up) + hat tricks
+        self.scorer_name = ""
+        for p in self.players:
+            nm, g = p.get("name", ""), p.get("goals", 0)
+            if nm and g > self.goals_by.get(nm, 0):
+                self.scorer_name = nm
+                if g >= 3 and nm not in self.ht_done:
+                    self.ht_done.add(nm)
+                    self.ht_boom_until = now + BOOM_SECS
+                    self.ht_until = self.ht_boom_until + HAT_SECS
+                    log(f"HAT TRICK — {nm}")
+            if nm:
+                self.goals_by[nm] = g
         scored0, scored1 = ev["t0"] > self.t0, ev["t1"] > self.t1
         goal = scored0 or scored1
         entering_ot = ev["ot"] and not self.ot
@@ -745,9 +776,11 @@ class Scoreboard:
         if goal:
             self.flash_team = 0 if scored0 else 1
             self.goal_until = now + GOAL_BANNER_SECS
-            self.flash_until = now + GOAL_BANNER_SECS + FLASH_SECS
+            self.scorer_until = self.goal_until + (SCORER_SECS if self.scorer_name else 0)
+            self.flash_until = self.scorer_until + FLASH_SECS
             log(f"GOAL ({'blue' if scored0 else 'orange'}) -> {self.t0}-{self.t1}"
-                f"{' OT' if self.ot else ''}")
+                f"{' OT' if self.ot else ''}" +
+                (f" by {self.scorer_name}" if self.scorer_name else ""))
         if entering_ot:
             self.ot_until = max(now, self.flash_until) + OT_NOTICE_SECS
             log("OVERTIME")
@@ -765,6 +798,18 @@ class Scoreboard:
         self.post_until = now + POST_SECS
         self.last_data = now
         log("POST (crossbar)")
+        self._publish(self._render(now), now, force=True)
+
+    def on_save(self, now):
+        self.save_until = now + SAVE_SECS
+        self.last_data = now
+        log("WHAT A SAVE!")
+        self._publish(self._render(now), now, force=True)
+
+    def on_demo(self, now):
+        self.demo_until = now + DEMO_SECS
+        self.last_data = now
+        log("DEMOLISHED")
         self._publish(self._render(now), now, force=True)
 
     def on_end(self, now):
@@ -786,10 +831,9 @@ class Scoreboard:
                 if self.t0 != self.t1:                    # winner's car pushes the ball away
                     play_car(self.tx, BLUE if self.t0 > self.t1 else ORANGE,
                              time.sleep, 0.04)
-                self.tx.dismiss()
                 self.final_until = 0.0
-                self.last_payload = None
-                log("released")
+                self.go_waiting(time.monotonic())          # back to WAITING FOR MATCH
+                log("released -> waiting")
             elif now >= self.final_score_until and self.mvp:
                 self._publish(self._mvp_card(), now)       # third beat: MVP
             elif now >= self.final_name_until:
@@ -802,15 +846,21 @@ class Scoreboard:
                 self.release("match went silent")
             else:
                 self._publish(self._render(now), now)
+        elif self.waiting and now - self.last_pub > 20:    # keep the held card alive
+            self._publish(self._waiting_card(), now, force=True)
 
     def release(self, reason):
-        if self.active or self.final_until or self.last_payload:
-            log(f"releasing the clock ({reason})")
-        self.tx.dismiss()
-        self.active = False
-        self.t0 = self.t1 = 0
-        self.final_until = 0.0
-        self.last_payload = None
+        if reason == "shutdown":
+            if self.active or self.final_until or self.last_payload:
+                log("releasing the clock (shutdown)")
+            self.tx.dismiss()
+            self.active = self.waiting = False
+            self.t0 = self.t1 = 0
+            self.final_until = 0.0
+            self.last_payload = None
+        else:                                              # link lost / silent -> waiting
+            log(f"{reason} -> waiting")
+            self.go_waiting(time.monotonic())
 
 
 # ===========================================================================
@@ -835,10 +885,10 @@ def build_args():
     p = argparse.ArgumentParser(
         prog="clocket-league",
         description="Live Rocket League scoreboard on an AWTRIX pixel clock.")
-    p.add_argument("--source", choices=["rl", "ballshark", "demo", "showcase"],
+    p.add_argument("--source", choices=["rl", "demo", "showcase"],
                    default=e("CL_SOURCE", "rl"),
-                   help="match data: rl (RL's socket, default), ballshark (tracker WS), "
-                        "demo (scripted match), showcase (labeled tour of every screen)")
+                   help="match data: rl (RL's Stats API socket, default), "
+                        "demo (scripted match), showcase (tour of every screen)")
     p.add_argument("--transport", choices=["http", "mqtt"],
                    default=e("CL_TRANSPORT", "http"), help="how to reach the clock")
     p.add_argument("--disable", default=e("CL_DISABLE", ""),
@@ -860,8 +910,6 @@ def build_args():
     # rl source
     p.add_argument("--rl-host", default=e("RL_HOST", "127.0.0.1"))
     p.add_argument("--rl-port", type=int, default=int(e("RL_PORT", "49123")))
-    # ballshark source
-    p.add_argument("--ballshark-ws", default=e("BALLSHARK_WS", "ws://127.0.0.1:5050/ws"))
     # http transport
     p.add_argument("--clock-host", default=e("CLOCK_HOST", ""),
                    help="AWTRIX clock IP/host for --transport http")
@@ -891,11 +939,8 @@ def make_source(a):
     if a.source == "demo":
         log(f"source: demo (speed={a.demo_speed}{', once' if a.demo_once else ''})")
         return demo_source(a.demo_speed, once=a.demo_once)
-    if a.source == "rl":
-        log(f"source: rl -> {a.rl_host}:{a.rl_port}")
-        return rl_source(a.rl_host, a.rl_port, a.player_name, a.player_id)
-    log(f"source: ballshark -> {a.ballshark_ws}")
-    return ballshark_source(a.ballshark_ws, a.player_name, a.player_id)
+    log(f"source: rl -> {a.rl_host}:{a.rl_port}")
+    return rl_source(a.rl_host, a.rl_port, a.player_name, a.player_id)
 
 
 def main():
@@ -932,15 +977,13 @@ def main():
             log("bye")
         return
 
-    if a.source in ("rl", "ballshark") and "greeting" not in disabled:
+    if a.source == "rl" and "greeting" not in disabled:
         log("greeting")
         tx.notify({"text": "THIS IS ROCKET LEAGUE!", "rainbow": True, "hold": True,
                    "stack": False, "wakeup": True, "pushIcon": 0})
-        time.sleep(3.4)
-        tx.notify({"text": "WAITING FOR MATCH", "color": "#888888", "hold": True,
-                   "stack": False, "pushIcon": 0})
-        time.sleep(2.6)
-        tx.dismiss()
+        time.sleep(6.0)                       # let the whole line scroll through
+    if a.source == "rl":
+        board.go_waiting(time.monotonic())    # then hold WAITING FOR MATCH until a match
 
     log("running — play Rocket League. Ctrl-C to stop.")
     src = make_source(a)
@@ -965,6 +1008,10 @@ def main():
                 board.on_goal(now)
             elif t == "crossbar":
                 board.on_crossbar(now)
+            elif t == "save":
+                board.on_save(now)
+            elif t == "demo":
+                board.on_demo(now)
             elif t == "end":
                 board.on_end(now)
     finally:

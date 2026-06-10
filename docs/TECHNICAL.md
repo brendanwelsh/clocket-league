@@ -7,7 +7,7 @@ the clock).
 
 ```
  source ──normalized events──▶ Scoreboard ──notify payloads──▶ transport ──▶ AWTRIX clock
- (rl / ballshark / demo)        (state machine)                 (http / mqtt)
+ (rl / demo / showcase)         (state machine)                 (http / mqtt)
 ```
 
 ## The Rocket League Stats API
@@ -53,11 +53,7 @@ from:
 {"type":"_connected"} | {"type":"_disconnected"} | None   # None = idle poll tick
 ```
 
-- **`rl`** — the socket reader above.
-- **`ballshark`** — connects to a [ballshark](https://github.com/brendanwelsh/ballshark)
-  tracker's WebSocket and maps its `match_start` / `tick` / `goal` / `crossbar` /
-  `match_end` messages to the same shape. Useful so two programs don't both grab
-  RL's single socket.
+- **`rl`** — the socket reader above (the only live source).
 - **`demo`** — a scripted highlight match (no RL needed). Loops, or runs once with
   `--demo-once`. Includes fake 4v4 boost so boost mode is demoable.
 
