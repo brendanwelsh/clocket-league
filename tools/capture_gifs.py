@@ -29,9 +29,11 @@ os.makedirs(OUT, exist_ok=True)
 
 FPS = 10
 DUR = 3.0                 # every GIF is exactly this long
-SCALE = 11                # px per LED
-GAP = 2                   # dark gap between LEDs
-DOT = SCALE - GAP
+# Match the AWTRIX web-UI recorder exactly: square LEDs at 33px pitch (29px lit),
+# in the TC001 device bezel, then scaled down for file size.
+PITCH, LED, PAD, FINAL = 33, 29, 60, 0.45
+W, H = 31 * PITCH + LED, 7 * PITCH + LED        # 1052 x 260, like the web UI
+_BEZEL = Image.open(os.path.join(HERE, "tools", "bezel.png")).convert("RGBA")
 
 tx = cl.HttpTransport(CLOCK)
 sb = cl.Scoreboard(tx)
@@ -43,19 +45,20 @@ def grab():
 
 
 def render(buf):
-    """LED-panel look: each pixel a rounded dot on near-black."""
-    W, H = 32 * SCALE, 8 * SCALE
-    img = Image.new("RGB", (W, H), (6, 6, 8))
-    d = ImageDraw.Draw(img)
+    """Render a frame the way the /screen web-UI recorder does: square LEDs on
+    black inside the device bezel."""
+    canvas = Image.new("RGB", (W, H), (0, 0, 0))
+    d = ImageDraw.Draw(canvas)
     for i, c in enumerate(buf):
-        x, y = i % 32, i // 32
-        r, g, b = (c >> 16) & 255, (c >> 8) & 255, c & 255
-        x0, y0 = x * SCALE + GAP // 2, y * SCALE + GAP // 2
-        if r or g or b:
-            d.ellipse([x0, y0, x0 + DOT, y0 + DOT], fill=(r, g, b))
-        else:
-            d.ellipse([x0, y0, x0 + DOT, y0 + DOT], fill=(16, 16, 20))
-    return img
+        col = ((c >> 16) & 255, (c >> 8) & 255, c & 255)
+        if any(col):
+            x0, y0 = (i % 32) * PITCH, (i // 32) * PITCH
+            d.rectangle([x0, y0, x0 + LED - 1, y0 + LED - 1], fill=col)
+    framed = Image.new("RGBA", (W + 2 * PAD, H + 2 * PAD), (0, 0, 0, 255))
+    framed.paste(canvas, (PAD, PAD))
+    framed.alpha_composite(_BEZEL.resize(framed.size))
+    out = framed.convert("RGB")
+    return out.resize((round(out.width * FINAL), round(out.height * FINAL)))
 
 
 def capture(name, animate):
@@ -78,9 +81,18 @@ def capture(name, animate):
     tx.dismiss()
     time.sleep(0.4)
     path = os.path.join(OUT, name + ".gif")
-    frames[0].save(path, save_all=True, append_images=frames[1:],
-                   duration=int(1000 / FPS), loop=0, optimize=True)
-    print(f"  {name}.gif  ({len(frames)} frames)")
+    # Build one palette from ALL frames stacked, so every color (blue, orange,
+    # white, the bezel) is represented — otherwise a low-blue frame's palette
+    # would map a blue GOAL! to gray.
+    fw, fh = frames[0].size
+    combo = Image.new("RGB", (fw, fh * len(frames)))
+    for idx, f in enumerate(frames):
+        combo.paste(f, (0, idx * fh))
+    pal = combo.quantize(colors=128, method=Image.FASTOCTREE)
+    q = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in frames]
+    q[0].save(path, save_all=True, append_images=q[1:],
+              duration=int(1000 / FPS), loop=0, optimize=True)
+    print(f"  {name}.gif  ({len(frames)} frames, {os.path.getsize(path)//1024}KB)")
 
 
 # --- animators: each keeps publishing its screen until `stop` is set ---------
