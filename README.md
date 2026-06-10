@@ -1,14 +1,44 @@
 # clocket-league
 
-**Your live Rocket League match on a pixel clock.** Score in team colors with the
-in-game clock, a blinking **GOAL!** in the scorer's color, **POST** when you ring
-the crossbar, overtime that counts up as **+0:42**, and a **BLUE WINS!** finish —
-with a little car that drives the ball in at kickoff and away at the whistle.
+**Your live Rocket League match on a pixel clock.** Turn an
+**[Ulanzi TC001](https://www.ulanzi.com/products/ulanzi-pixel-smart-clock-2882)**
+running **[AWTRIX 3](https://blueforcer.github.io/awtrix3/)** into a live RL
+scoreboard: score in team colors with the in‑game clock, a blinking **GOAL!** in
+the scorer's color, **POST** on the crossbar, overtime counting up as **+0:42**,
+and a **BLUE WINS!** finish — with a little car that drives the ball in at kickoff
+and away at the whistle.
 
-No tracker account, no cloud, no browser — it reads Rocket League's *own* local
-Stats API and talks straight to your clock over your LAN.
+This only became possible when Psyonix shipped Rocket League's **official
+[Stats API](https://www.rocketleague.com/en/developer/stats-api)** — a local data
+feed the game can emit on your own PC. clocket-league reads that feed directly and
+talks straight to your clock over your home WiFi. No account, no cloud, no website.
 
-<p align="center"><img src="docs/gifs/03-score-clock.gif" width="420"></p>
+<p align="center">
+  <img src="docs/in-action.webp" width="460"><br>
+  <sub><i>The TC001 on a real desk, mid‑match — blue 2, orange 6, 1:02 on the clock.</i></sub>
+</p>
+
+---
+
+## What is this?
+
+clocket-league turns a small desk **pixel clock** into a **live Rocket League
+scoreboard**. While you're in a match, the clock drops its normal time/weather
+display and shows the live score, the game clock, goals, overtime and boost —
+then goes back to being a clock when the match ends. It runs quietly on your
+gaming PC while you play; you set it up once and forget about it.
+
+### What you need
+
+- **A pixel clock** — an **[Ulanzi TC001](https://www.ulanzi.com/products/ulanzi-pixel-smart-clock-2882)**
+  (~$60; a 32×8 RGB-LED "smart pixel clock"), running the free, open-source
+  **[AWTRIX 3](https://blueforcer.github.io/awtrix3/)** firmware. You flash AWTRIX 3
+  onto it once, right from your browser — see [Setup](#setup). (Any 32×8 AWTRIX
+  device works; the TC001 is the popular one.)
+- **Rocket League on a Windows PC** — the Stats API is **PC-only** (no consoles).
+- **Python 3.9+** on that PC. The default mode needs **no extra Python packages**.
+
+Total one-time setup is ~5 minutes: flash the clock, flip on RL's Stats API, run it.
 
 ---
 
@@ -36,24 +66,31 @@ Captured straight off an Ulanzi TC001.
 
 ---
 
-## Prerequisites
+## Setup
 
-1. **An AWTRIX 3 clock** — an [Ulanzi TC001](https://www.ulanzi.com/products/ulanzi-pixel-smart-clock-2882)
-   (~$60) or any 32×8 AWTRIX device, on your WiFi. Flash AWTRIX 3 and note its IP:
-   <https://blueforcer.github.io/awtrix3/>
-2. **Rocket League on a PC** (Steam or Epic — the Stats API is PC-only).
-3. **Python 3.9+** on that PC. The default setup needs **no extra packages**.
+Three one-time steps. You don't need to know how to code — you'll just copy a few
+things and paste them. Take it slow; it's about 5 minutes.
 
-## Install
+### 1. Put AWTRIX on your clock
 
-```bash
-git clone https://github.com/brendanwelsh/clocket-league
-cd clocket-league
+The Ulanzi TC001 ships with its own software; you swap it for **AWTRIX 3** (free,
+open-source) so this tool can talk to it. Plug the clock into your PC with a USB‑C
+cable and follow the official flasher — it runs right in your web browser:
+👉 **<https://blueforcer.github.io/awtrix3/>** (open its **Quick start**).
+
+During setup it connects the clock to your WiFi and shows an **IP address** (looks
+like `192.168.1.50`). **Write that number down — you'll need it.**
+
+### 2. Switch on Rocket League's data feed
+
+Rocket League can share live match info on your own PC — you just turn it on once.
+Open this file (make it if it's not there) inside your Rocket League folder:
+
+```
+...\rocketleague\TAGame\Config\DefaultStatsAPI.ini
 ```
 
-## Turn on Rocket League's Stats API (one time)
-
-Edit (create if missing) `<RL install>\TAGame\Config\DefaultStatsAPI.ini`:
+and put these three lines in it, then save:
 
 ```ini
 [StatsAPI]
@@ -61,19 +98,30 @@ Port=49123
 PacketSendRate=30
 ```
 
-Then **restart Rocket League**. Official Psyonix API —
-<https://www.rocketleague.com/en/developer/stats-api>.
+Then **fully close and reopen Rocket League.** (This is Rocket League's own
+official feature — nothing sketchy. Details: <https://www.rocketleague.com/en/developer/stats-api>.)
 
-## Run
+### 3. Run clocket-league
+
+On the same PC:
+
+1. Install **[Python](https://www.python.org/downloads/)** — during install, tick
+   **"Add Python to PATH."**
+2. Download this project: the green **`< > Code`** button near the top of this
+   page → **Download ZIP** → unzip it.
+3. Open that folder, type `cmd` in the address bar (or right‑click → open a
+   terminal), and run this — swapping in **your clock's IP from step 1**:
 
 ```bash
 python clocket_league.py --clock-host 192.168.1.50
 ```
 
-Use your clock's IP, then play. Prefer a file? Copy `.env.example` to `.env`.
+Now jump into a match. The clock takes over with your scoreboard and goes back to
+normal when the match ends. Leave that window open while you play.
 
-**See it without Rocket League:** `--source demo` plays a scripted match;
-`--source showcase` tours every screen.
+> **Just want to watch it first?** Run
+> `python clocket_league.py --source demo --clock-host 192.168.1.50` — it plays a
+> pretend match on the clock, no Rocket League needed.
 
 ---
 
