@@ -100,6 +100,32 @@ Three one-time steps:
 
 Then play. To preview it without Rocket League, add `--source demo`.
 
+### Where should it run?
+
+The script reads Rocket League's Stats API and talks straight to the clock over
+your LAN — it has nothing to do with Home Assistant. There are two places to run it:
+
+- **On the gaming PC (simplest — recommended for most people).** RL's Stats API
+  is local, so the script reads `127.0.0.1` and needs no network setup at all. Just
+  run the command above and set it to autostart (Task Scheduler → "At log on", or
+  drop a shortcut to `run.bat` in your Startup folder). This is the path with zero
+  prerequisites — it works for everyone, including folks with only one machine.
+
+- **On an always-on box like a Raspberry Pi (homelab — fully hands-off).** Run it
+  anywhere on your LAN and point it at the gaming PC:
+
+  ```bash
+  python clocket_league.py --clock-host <clock-ip> --rl-host <gaming-pc-ip> --idle release
+  ```
+
+  Then it's always up and you never launch anything on the PC. Two things your
+  network needs (most flat home LANs already have them): the gaming PC's firewall
+  must allow inbound connections to port `49123` from the LAN, and the two hosts
+  must be able to route to each other (watch out for VLAN isolation). `--idle
+  release` hands the clock back to its normal face between matches so it isn't
+  permanently taken over — see [Configuration](#configuration--whats-togglable-and-how).
+  On Linux, `clocket-league.service` runs it as a systemd service.
+
 ---
 
 ## Configuration — what's togglable and how
