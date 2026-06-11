@@ -113,6 +113,7 @@ Every flag is also an env var / `.env` key (see [`.env.example`](.env.example)).
 | `--transport` | `http` (straight to the clock) · `mqtt` (via a broker) | `http` |
 | `--screens` | what the steady display shows — a comma list it rotates through (see below) | `score-time` |
 | `--swap-secs` | seconds per screen when `--screens` lists more than one | `10` |
+| `--idle` | between matches: `waiting` (hold `WAITING FOR MATCH`) · `release` (give the clock back to its normal face, only take over for a live match) | `waiting` |
 | `--disable` | turn features off: `greeting,countdown,goal,post,overtime,urgency` | none |
 | `--team-names` | `normalize` (BLUE/ORANGE WINS) · `actual` (real lobby name) | `normalize` |
 | `--player-name` | your in-game name — needed for the boost screens | — |

@@ -58,8 +58,11 @@ Launch greeting (rainbow `THIS IS ROCKET LEAGUE!`) → persistent gray
 `OVERTIME`/`+m:ss` → your/team boost → `FINAL` (BLUE/ORANGE WINS → score → `MVP`)
 → winner's car drives the ball away → back to WAITING.
 
-Config: `--screens`, `--swap-secs`, `--disable greeting,countdown,goal,post,overtime,urgency`,
+Config: `--screens`, `--swap-secs`, `--idle waiting|release`, `--disable greeting,countdown,goal,post,overtime,urgency`,
 `--team-names`, `--player-name`, `--source`, `--transport`. See README.
+`--idle release` hands the clock back to its normal face between matches (no
+`WAITING` takeover, no greeting) and only takes over for a live match — best for
+an always-on deployment. Default `waiting` keeps the persistent `WAITING` card.
 
 ## GIFs
 

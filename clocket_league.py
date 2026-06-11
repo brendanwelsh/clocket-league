@@ -445,12 +445,17 @@ def run_showcase(tx, speed=1.0, loop=True):
 # ===========================================================================
 class Scoreboard:
     def __init__(self, transport, *, disabled=None, screens=None, swap_secs=10.0,
-                 team_names="normalize") -> None:
+                 team_names="normalize", idle_release=False) -> None:
         self.tx = transport
         self.disabled = set(disabled or ())
         self.screens = list(screens) if screens else ["score-time"]
         self.swap_secs = max(2.0, swap_secs)
         self.team_names = team_names   # "normalize" -> BLUE/ORANGE, "actual" -> real
+        # idle_release: when no match is live, hand the clock back to its normal
+        # face (dismiss our card) instead of holding "WAITING FOR MATCH". Best for
+        # an always-on deployment — only take over the screen during a real match.
+        self.idle_release = idle_release
+        self.released = False     # True once we've handed the clock back (idle mode)
         self.active = False
         self.waiting = False      # show "WAITING FOR MATCH" while idle
         self.t0 = self.t1 = 0
@@ -718,6 +723,7 @@ class Scoreboard:
             return            # same card already up — don't re-push (it restarts scroll)
         self.tx.notify(payload)
         self.last_payload, self.last_pub = key, now
+        self.released = False        # a card is on screen now (no longer released)
 
     # -- event handlers ----------------------------------------------------
     def _reset_windows(self):
@@ -727,12 +733,20 @@ class Scoreboard:
         self.final_name_until = self.final_score_until = self.final_until = 0.0
 
     def go_waiting(self, now):
-        """Idle state: hold 'WAITING FOR MATCH' until a match starts."""
+        """Idle state (no live match). Either hold 'WAITING FOR MATCH', or — in
+        idle_release mode — hand the clock back to its normal face."""
         self.active = False
         self.t0 = self.t1 = 0
-        self.waiting = True
         self._reset_windows()
-        self._publish(self._waiting_card(), now, force=True)
+        if self.idle_release:
+            self.waiting = False
+            if not self.released:           # clear our card -> native clock shows
+                self.tx.dismiss()
+                self.last_payload = None
+                self.released = True
+        else:
+            self.waiting = True
+            self._publish(self._waiting_card(), now, force=True)
 
     def on_start(self, now):
         self.active = True
@@ -910,6 +924,11 @@ def build_args():
                         "boost-team. e.g. 'score,time' or 'score-time,boost,boost-team'")
     p.add_argument("--swap-secs", type=float, default=float(e("CL_SWAP_SECS", "10")),
                    help="seconds per screen when --screens has more than one (default 10)")
+    p.add_argument("--idle", choices=["waiting", "release"],
+                   default=e("CL_IDLE", "waiting"),
+                   help="when no match is live: waiting=hold 'WAITING FOR MATCH' "
+                        "(default), release=hand the clock back to its normal face "
+                        "and only take over during a real match (best for always-on)")
     p.add_argument("--player-name", default=e("RL_PLAYER_NAME", ""),
                    help="your in-game name, to find 'you' for boost mode")
     p.add_argument("--player-id", default=e("RL_PLAYER_PRIMARY_ID", ""),
@@ -962,8 +981,10 @@ def main():
         sys.exit(f"error: unknown --screens value(s): {', '.join(bad_s)} "
                  f"(choose from {', '.join(sorted(ALL_SCREENS))})")
     tx = make_transport(a)
+    idle_release = a.idle == "release"
     board = Scoreboard(tx, disabled=disabled, screens=screens,
-                       swap_secs=a.swap_secs, team_names=a.team_names)
+                       swap_secs=a.swap_secs, team_names=a.team_names,
+                       idle_release=idle_release)
     if disabled:
         log("disabled: " + ", ".join(sorted(disabled)))
     log("screens: " + " · ".join(screens) +
@@ -984,13 +1005,17 @@ def main():
             log("bye")
         return
 
-    if a.source == "rl" and "greeting" not in disabled:
+    # The launch greeting is a full-screen takeover — skip it in idle-release mode
+    # (there we only ever take over the clock for a live match).
+    if a.source == "rl" and not idle_release and "greeting" not in disabled:
         log("greeting")
         tx.notify({"text": "THIS IS ROCKET LEAGUE!", "rainbow": True, "hold": True,
                    "stack": False, "wakeup": True, "pushIcon": 0})
         time.sleep(6.0)                       # let the whole line scroll through
     if a.source == "rl":
-        board.go_waiting(time.monotonic())    # then hold WAITING FOR MATCH until a match
+        log("idle: " + ("release (normal clock until a match)" if idle_release
+                        else "WAITING FOR MATCH"))
+        board.go_waiting(time.monotonic())    # idle until a match (hold or release)
 
     log("running — play Rocket League. Ctrl-C to stop.")
     src = make_source(a)
